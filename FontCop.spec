@@ -22,21 +22,33 @@ _pystray_extras = []
 if sys.platform == "darwin":
     _pystray_extras = ["pystray._util_darwin"]
 
+# datas 容错：system_fonts.json / symbols.json 是 macOS 扫描产物（gitignore），
+# Windows 构建机上不存在，跳过即可（渲染层对缺失字体已优雅降级）
+_base_datas = [
+    ('fonts/fonts.json', 'fonts'),
+    ('fonts/system_fonts.json', 'fonts'),
+    ('fonts/symbols.json', 'fonts'),
+    ('fonts/files/*.ttf', 'fonts/files'),
+    ('fonts/files/*.otf', 'fonts/files'),
+    ('data/glyph_index.npz', 'data'),
+    ('web/index.html', 'web'),
+    ('web/app.js', 'web'),
+    ('web/style.css', 'web'),
+]
+_datas = []
+for _src, _dst in _base_datas:
+    if '*' in _src:
+        _datas.append((_src, _dst))  # glob 交给 PyInstaller 自行匹配（空结果不报错）
+    elif os.path.exists(_src):
+        _datas.append((_src, _dst))
+    else:
+        print(f"[spec] skip missing data: {_src}")
+
 a = Analysis(
     ['run.py'],
     pathex=[],
     binaries=[],
-    datas=[
-        ('fonts/fonts.json', 'fonts'),
-        ('fonts/system_fonts.json', 'fonts'),
-        ('fonts/symbols.json', 'fonts'),
-        ('fonts/files/*.ttf', 'fonts/files'),
-        ('fonts/files/*.otf', 'fonts/files'),
-        ('data/glyph_index.npz', 'data'),
-        ('web/index.html', 'web'),
-        ('web/app.js', 'web'),
-        ('web/style.css', 'web'),
-    ] + _rapidocr_datas,
+    datas=_datas + _rapidocr_datas,
     hiddenimports=[
         'rapidocr_onnxruntime',
         'rapidocr_onnxruntime.ch_ppocr_v3_det',
