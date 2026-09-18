@@ -1,0 +1,156 @@
+[
+  {
+    "id": "source-han-sans",
+    "name": "思源黑体",
+    "en_name": "Source Han Sans SC",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://github.com/adobe-fonts/source-han-sans",
+    "file": "SourceHanSansSC-Regular.otf"
+  },
+  {
+    "id": "source-han-serif",
+    "name": "思源宋体",
+    "en_name": "Source Han Serif SC",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "serif",
+    "source_url": "https://github.com/adobe-fonts/source-han-serif",
+    "file": "SourceHanSerifSC-Regular.otf"
+  },
+  {
+    "id": "lxgw-wenkai",
+    "name": "霞鹜文楷",
+    "en_name": "LXGW WenKai",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "kai",
+    "source_url": "https://github.com/lxgw/LxgwWenKai",
+    "file": "LXGWWenKai-Regular.ttf"
+  },
+  {
+    "id": "smiley-sans",
+    "name": "得意黑",
+    "en_name": "Smiley Sans",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "sans-oblique",
+    "source_url": "https://github.com/atelier-anchor/smiley-sans",
+    "file": "SmileySans-Oblique.ttf"
+  },
+  {
+    "id": "noto-sans-cjk",
+    "name": "Noto Sans CJK SC",
+    "en_name": "Noto Sans CJK SC",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://fonts.google.com/noto",
+    "file": "NotoSansSC-Regular.otf"
+  },
+  {
+    "id": "noto-serif-cjk",
+    "name": "Noto Serif CJK SC",
+    "en_name": "Noto Serif CJK SC",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "serif",
+    "source_url": "https://fonts.google.com/noto",
+    "file": "NotoSerifSC-Regular.otf"
+  },
+  {
+    "id": "zcool-kuaile",
+    "name": "站酷快乐体",
+    "en_name": "ZCOOL KuaiLe",
+    "license": "free-commercial",
+    "commercial_free": true,
+    "style": "handwriting",
+    "source_url": "https://fonts.google.com/?query=ZCOOL",
+    "file": "ZCOOLKuaiLe-Regular.ttf"
+  },
+  {
+    "id": "zcool-xiaowei",
+    "name": "站酷小薇体",
+    "en_name": "ZCOOL XiaoWei",
+    "license": "free-commercial",
+    "commercial_free": true,
+    "style": "serif",
+    "source_url": "https://fonts.google.com/?query=ZCOOL",
+    "file": "ZCOOLXiaoWei-Regular.ttf"
+  },
+  {
+    "id": "inter",
+    "name": "Inter",
+    "en_name": "Inter",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://fonts.google.com/specimen/Inter",
+    "file": "Inter-Regular.ttf"
+  },
+  {
+    "id": "jetbrains-mono",
+    "name": "JetBrains Mono",
+    "en_name": "JetBrains Mono",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "mono",
+    "source_url": "https://github.com/JetBrains/JetBrainsMono",
+    "file": "JetBrainsMono-Regular.ttf"
+  },
+  {
+    "id": "dejavu-sans",
+    "name": "DejaVu Sans",
+    "en_name": "DejaVu Sans",
+    "license": "free",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://dejavu-fonts.github.io/",
+    "file": "DejaVuSans.ttf"
+  },
+  {
+    "id": "system-0",
+    "name": "黑體-繁",
+    "en_name": "黑體-繁",
+    "license": "系统内置（macOS 授权）",
+    "commercial_free": false,
+    "style": "system",
+    "source_url": "",
+    "file": "system:/System/Library/Fonts/STHeiti Light.ttc#0",
+    "is_system": true
+  },
+  {
+    "id": "system-1",
+    "name": "黑體-簡",
+    "en_name": "黑體-簡",
+    "license": "系统内置（macOS 授权）",
+    "commercial_free": false,
+    "style": "system",
+    "source_url": "",
+    "file": "system:/System/Library/Fonts/STHeiti Light.ttc#1",
+    "is_system": true
+  },
+  {
+    "id": "system-2",
+    "name": "宋體-簡",
+    "en_name": "宋體-簡",
+    "license": "系统内置（macOS 授权）",
+    "commercial_free": false,
+    "style": "system",
+    "source_url": "",
+    "file": "system:/System/Library/Fonts/Supplemental/Songti.ttc#0",
+    "is_system": true
+  },
+  {
+    "id": "system-3",
+    "name": "宋體-繁",
+    "en_name": "宋體-繁",
+    "license": "系统内置（macOS 授权）",
+    "commercial_free": false,
+    "style": "system",
+    "source_url": "",
+    "file": "system:/System/Library/Fonts/Supplemental/Songti.ttc#2",
+    "is_system": true
+  }
+]

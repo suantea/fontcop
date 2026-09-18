@@ -1,0 +1,23 @@
+# Python
+.venv/
+__pycache__/
+*.pyc
+
+# 构建产物
+dist/
+build/
+*.spec.bak
+
+# 运行时生成（索引可由 src.indexer 重建，历史为用户数据）
+data/glyph_index.npz
+data/history.jsonl
+FontCop_data/
+
+# 字体文件（体积大且含授权差异，用 tools/fetch_fonts.py 重建）
+fonts/files/
+fonts/system_fonts.json
+fonts/symbols.json
+fonts/coverage.json
+
+# 系统
+.DS_Store

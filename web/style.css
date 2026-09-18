@@ -1,0 +1,66 @@
+* { box-sizing: border-box; margin: 0; padding: 0; }
+[hidden] { display: none !important; }   /* 修复：display:flex/grid 覆盖 hidden 导致弹层无法关闭 */
+body { font-family: -apple-system, "PingFang SC", sans-serif; background: #f5f6f7; color: #1d2129; }
+
+header { display: flex; justify-content: space-between; align-items: center; padding: 14px 24px; background: #fff; border-bottom: 1px solid #e5e6eb; }
+h1 { font-size: 20px; }
+h1 .sub { font-size: 13px; color: #86909c; font-weight: normal; margin-left: 8px; }
+nav button { margin-left: 8px; }
+
+main { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; padding: 16px 24px; max-width: 1200px; margin: 0 auto; }
+section { min-height: 400px; }
+
+#dropzone { border: 2px dashed #c9cdd4; border-radius: 12px; background: #fff; display: flex; flex-direction: column; align-items: center; justify-content: center; min-height: 360px; cursor: pointer; transition: border-color .15s; }
+#dropzone.dragover { border-color: #165dff; background: #f0f7ff; }
+#dropzone .big { font-size: 17px; margin-bottom: 8px; }
+#dropzone .hint { color: #86909c; font-size: 13px; }
+
+#canvas-wrap { background: #fff; border-radius: 12px; padding: 12px; }
+#canvas { display: block; max-width: 100%; border: 1px solid #e5e6eb; border-radius: 6px; cursor: crosshair; }
+.toolbar { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+#marks-info { color: #86909c; font-size: 13px; flex: 1; }
+
+button { border: none; border-radius: 6px; padding: 7px 16px; font-size: 14px; cursor: pointer; }
+button.primary { background: #165dff; color: #fff; }
+button.primary:disabled { background: #94bfff; cursor: not-allowed; }
+button.ghost { background: #f2f3f5; color: #4e5969; }
+button.link { background: none; color: #165dff; padding: 0; text-decoration: underline; }
+
+#result-empty { color: #86909c; text-align: center; padding-top: 160px; }
+/* 防长串（如错误路径/base64）撑爆布局导致挤压变形 */
+#verdict, #marks-info, .cand-card .name, .cand-card .meta, #fonts-list, #history-list {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+  min-width: 0;
+}
+#verdict { font-size: 18px; font-weight: 600; padding: 12px 16px; border-radius: 10px; margin-bottom: 12px; }
+#verdict.free { background: #e8ffea; color: #00b42a; }
+#verdict.suspect { background: #fff7e8; color: #ff7d00; }
+#verdict.risky { background: #ffece8; color: #f53f3f; }
+
+.cand-card { display: flex; gap: 12px; align-items: center; background: #fff; border-radius: 10px; padding: 12px; margin-bottom: 10px; border: 1px solid #e5e6eb; }
+.cand-card img { width: 64px; height: 64px; image-rendering: pixelated; border: 1px solid #e5e6eb; border-radius: 6px; background: #fff; }
+.cand-card .info { flex: 1; }
+.cand-card .name { font-weight: 600; }
+.cand-card .meta { font-size: 12px; color: #86909c; margin: 2px 0 6px; }
+.cand-card .meta a { color: #165dff; }
+.bar { height: 6px; background: #f2f3f5; border-radius: 3px; overflow: hidden; }
+.bar > div { height: 100%; background: #165dff; }
+.cand-card .score { font-size: 13px; color: #4e5969; width: 52px; text-align: right; }
+
+#char-dialog { position: fixed; background: #fff; border: 1px solid #e5e6eb; border-radius: 10px; box-shadow: 0 8px 24px rgba(0,0,0,.12); padding: 14px; z-index: 10; width: 220px; }
+#char-dialog p { font-size: 13px; margin-bottom: 8px; color: #4e5969; }
+#char-input { width: 100%; font-size: 20px; padding: 6px 10px; border: 1px solid #c9cdd4; border-radius: 6px; margin-bottom: 10px; text-align: center; }
+#char-dialog > div { display: flex; gap: 8px; justify-content: flex-end; }
+
+.modal { position: fixed; inset: 0; background: rgba(0,0,0,.35); display: flex; align-items: center; justify-content: center; z-index: 20; }
+.modal-box { background: #fff; border-radius: 12px; padding: 20px; width: 520px; max-height: 70vh; overflow: auto; }
+.modal-box h3 { display: flex; justify-content: space-between; margin-bottom: 14px; }
+.modal-note { font-size: 13px; color: #4e5969; margin-bottom: 10px; }
+.modal-note a { color: #165dff; }
+.hist-row { display: flex; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid #f2f3f5; font-size: 14px; }
+.hist-row .v-free { color: #00b42a; } .hist-row .v-suspect { color: #ff7d00; } .hist-row .v-risky { color: #f53f3f; }
+.font-row { display: flex; justify-content: space-between; padding: 8px 4px; border-bottom: 1px solid #f2f3f5; font-size: 14px; }
+.font-row .lic { color: #86909c; font-size: 12px; }
+
+.muted { color: #86909c; }

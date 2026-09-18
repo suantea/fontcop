@@ -1,0 +1,76 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<title>FontCop — 字体版权快查</title>
+<link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<header>
+  <h1>FontCop <span class="sub">字体版权快查</span></h1>
+  <nav>
+    <button id="btn-history" class="ghost">历史</button>
+    <button id="btn-fonts" class="ghost">白名单</button>
+  </nav>
+</header>
+
+<main>
+  <!-- 左：图片区 -->
+  <section id="left">
+    <div id="dropzone">
+      <p class="big">拖入图片 / ⌘V 粘贴截图</p>
+      <p class="hint">或 <button id="btn-file" class="link">选择文件</button></p>
+      <input type="file" id="file-input" accept="image/*" hidden>
+    </div>
+
+    <div id="canvas-wrap" hidden>
+      <canvas id="canvas"></canvas>
+      <div class="toolbar">
+        <span id="marks-info">已标注：无</span>
+        <button id="btn-auto" class="ghost">🔍 自动识别</button>
+        <button id="btn-run" class="primary" disabled>开始识别</button>
+        <button id="btn-reset" class="ghost">重置</button>
+      </div>
+    </div>
+  </section>
+
+  <!-- 右：结果区 -->
+  <section id="right">
+    <div id="result-empty" class="muted">识别结果将显示在这里</div>
+    <div id="result" hidden>
+      <div id="verdict"></div>
+      <div id="candidates"></div>
+    </div>
+  </section>
+</main>
+
+<!-- 框选后输入字符的浮层 -->
+<div id="char-dialog" hidden>
+  <p>框选的字是：</p>
+  <input id="char-input" maxlength="4" autocomplete="off" placeholder="输入这个字，如 锋">
+  <div>
+    <button id="char-ok" class="primary">确定</button>
+    <button id="char-cancel" class="ghost">取消</button>
+  </div>
+</div>
+
+<!-- 历史弹层 -->
+<div id="modal-history" class="modal" hidden>
+  <div class="modal-box">
+    <h3>识别历史 <button class="ghost" id="history-close">关闭</button></h3>
+    <div id="history-list"></div>
+  </div>
+</div>
+
+<!-- 白名单弹层 -->
+<div id="modal-fonts" class="modal" hidden>
+  <div class="modal-box">
+    <h3>字体白名单 <button class="ghost" id="fonts-close">关闭</button></h3>
+    <p class="modal-note">共 <span id="fonts-count">-</span> 款 · 版权所有：<a href="https://my-ichery.feishu.cn/drive/folder/EONWfDeCElRaPNdJf9VcorTgn3e?from=from_copylink" target="_blank">李享骏（字体下载地址）</a></p>
+    <div id="fonts-list"></div>
+  </div>
+</div>
+
+<script src="/app.js"></script>
+</body>
+</html>
