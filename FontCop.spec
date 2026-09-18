@@ -23,7 +23,10 @@ if sys.platform == "darwin":
     _pystray_extras = ["pystray._util_darwin"]
 
 # datas 容错：system_fonts.json / symbols.json 是 macOS 扫描产物（gitignore），
-# Windows 构建机上不存在，跳过即可（渲染层对缺失字体已优雅降级）
+# fonts/files/*.ttf 字体二进制也 gitignore（体积大），构建机上不存在时跳过。
+# 注意：PyInstaller 对"无匹配的 glob"会直接报错，所以这里自行展开 glob。
+import glob as _glob
+
 _base_datas = [
     ('fonts/fonts.json', 'fonts'),
     ('fonts/system_fonts.json', 'fonts'),
@@ -38,7 +41,7 @@ _base_datas = [
 _datas = []
 for _src, _dst in _base_datas:
     if '*' in _src:
-        _datas.append((_src, _dst))  # glob 交给 PyInstaller 自行匹配（空结果不报错）
+        _datas.extend((_f, _dst) for _f in _glob.glob(_src))  # 无匹配则自然为空
     elif os.path.exists(_src):
         _datas.append((_src, _dst))
     else:

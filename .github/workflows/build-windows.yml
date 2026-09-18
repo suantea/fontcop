@@ -21,6 +21,9 @@ jobs:
           python -m pip install --upgrade pip
           pip install pillow numpy scipy fonttools pystray pyinstaller rapidocr-onnxruntime
 
+      - name: Download whitelist fonts
+        run: python tools/fetch_fonts.py
+
       - name: Build glyph index
         run: python -m src.indexer
 
