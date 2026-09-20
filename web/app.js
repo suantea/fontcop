@@ -2,6 +2,10 @@
 (() => {
   const $ = (id) => document.getElementById(id);
 
+  // HTML 转义：所有拼进 innerHTML 的用户/外部数据都必须过 esc()，防自 XSS/破版
+  const esc = (s) => String(s ?? "").replace(/[&<>"']/g,
+    (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", '"': "&quot;", "'": "&#39;" }[c]));
+
   let img = null;            // 当前 Image 对象
   let marks = [];            // [{x1,y1,x2,y2,char}]
   let pendingBox = null;     // 正在框选的区域
@@ -32,10 +36,10 @@
     canvas.height = img.naturalHeight;
     ctx.drawImage(img, 0, 0);
     // 已标注框
-    ctx.strokeStyle = "#165dff"; ctx.lineWidth = 2;
+    ctx.strokeStyle = "#3b6ef5"; ctx.lineWidth = 2;
     for (const m of marks) {
       ctx.strokeRect(m.x1, m.y1, m.x2 - m.x1, m.y2 - m.y1);
-      ctx.fillStyle = "#165dff";
+      ctx.fillStyle = "#3b6ef5";
       ctx.font = "16px sans-serif";
       ctx.fillText(m.char, m.x1 + 2, m.y1 - 4 < 16 ? m.y1 + 18 : m.y1 - 4);
     }
@@ -65,16 +69,29 @@
     if (e.dataTransfer.files[0]) loadImageFile(e.dataTransfer.files[0]);
   };
 
+  // 页面级粘贴（Ctrl+V）：加载图片后自动识别，实现连续使用
   document.addEventListener("paste", (e) => {
     for (const item of e.clipboardData.items) {
       if (item.type.startsWith("image/")) {
-        loadImageFile(item.getAsFile());
-        break;
+        const blob = item.getAsFile();
+        const im = new Image();
+        im.onload = async () => {
+          img = im; marks = []; showCanvas();
+          const c = document.createElement("canvas");
+          c.width = img.naturalWidth; c.height = img.naturalHeight;
+          c.getContext("2d").drawImage(img, 0, 0);
+          const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
+          const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
+          await doAutoRecognize(b64);
+        };
+        im.src = URL.createObjectURL(blob);
+        e.preventDefault();
+        return;
       }
     }
   });
 
-  // 页面加载/聚焦时自动读取剪贴板截图（配合托盘"截图识别"流程）
+  // 页面聚焦时自动读取剪贴板截图（配合托盘"截图识别"流程；不覆盖正在编辑的图）
   async function tryClipboardImage() {
     try {
       const items = await navigator.clipboard.read();
@@ -82,11 +99,11 @@
         const type = item.types.find((t) => t.startsWith("image/"));
         if (type) {
           const blob = await item.getType(type);
-          if (img === null) loadImageFile(blob);  // 不覆盖已在编辑的图
+          if (img === null) loadImageFile(blob);
           return;
         }
       }
-    } catch { /* 无权限或剪贴板无图：静默忽略，用户可 ⌘V */ }
+    } catch { /* 无权限或剪贴板无图：静默忽略，用户可 Ctrl+V */ }
   }
   window.addEventListener("focus", tryClipboardImage);
 
@@ -96,7 +113,16 @@
     if (!img) return;
     const r = canvas.getBoundingClientRect();
     const sx = canvas.width / r.width, sy = canvas.height / r.height;
-    dragStart = { x: (e.clientX - r.left) * sx, y: (e.clientY - r.top) * sy, sx, sy };
+    const px = (e.clientX - r.left) * sx, py = (e.clientY - r.top) * sy;
+    // 点中已有标注框 → 删除该框
+    const hit = marks.findIndex((m) => px >= m.x1 && px <= m.x2 && py >= m.y1 && py <= m.y2);
+    if (hit >= 0) {
+      marks.splice(hit, 1);
+      redraw(); updateMarks();
+      dragStart = null;
+      return;
+    }
+    dragStart = { x: px, y: py, sx, sy };
   });
   canvas.addEventListener("mousemove", (e) => {
     if (!dragStart) return;
@@ -134,6 +160,9 @@
   function confirmChar() {
     const ch = $("char-input").value.trim()[0];
     if (!ch) return;
+    // 同一字符只保留一个标注：已有该字时替换为新框
+    const dup = marks.findIndex((m) => m.char === ch);
+    if (dup >= 0) marks.splice(dup, 1);
     marks.push({ ...pendingBox, char: ch });
     closeCharDialog();
     updateMarks();
@@ -175,79 +204,238 @@
   }
   $("btn-run").onclick = cropAndSend;
 
-  // ---------- 自动识别（RapidOCR）----------
-  $("btn-auto").onclick = async () => {
-    if (!img) return;
-    $("btn-auto").disabled = true;
-    $("marks-info").textContent = "自动识别中…";
-    const c = document.createElement("canvas");
-    c.width = img.naturalWidth; c.height = img.naturalHeight;
-    c.getContext("2d").drawImage(img, 0, 0);
-    const blob = await new Promise((res) => c.toBlob(res, "image/png"));
-    const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
-    try {
-      const resp = await fetch("/api/auto", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ image_b64: b64 }),
-      });
-      const r = await resp.json();
-      if (r.chars_used) $("marks-info").textContent = "自动使用字符：" + r.chars_used.join(" ");
-      renderResult(r);
-    } catch (err) {
-      $("marks-info").textContent = "自动识别失败：" + err.message + "（可回退手动框选）";
-    }
-    $("btn-auto").disabled = false;
-  };
+   // ---------- 自动识别（RapidOCR）----------
+   // 复用：把“编码→POST→渲染”抽成函数，避免按钮和粘贴重复代码
+   async function doAutoRecognize(b64) {
+     const btn = $("btn-auto");
+     btn.disabled = true;
+     $("marks-info").textContent = "自动识别中…";
+     try {
+       const resp = await fetch("/api/auto", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({ image_b64: b64 }),
+       });
+       const r = await resp.json();
+       if (r.error) {
+         $("marks-info").textContent = "自动识别失败：" + r.error;
+         renderResult(r);  // 上屏中性失败态，避免残留上一条判定
+         return;
+       }
+       if (r.chars_used) $("marks-info").textContent = "自动使用字符：" + r.chars_used.join(" ");
+       renderResult(r);
+     } catch (err) {
+       $("marks-info").textContent = "自动识别失败：" + err.message + "（可回退手动框选）";
+     }
+     btn.disabled = false;
+   }
+   $("btn-auto").onclick = async () => {
+     if (!img) return;
+     const c = document.createElement("canvas");
+     c.width = img.naturalWidth; c.height = img.naturalHeight;
+     c.getContext("2d").drawImage(img, 0, 0);
+     const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+     const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
+     await doAutoRecognize(b64);
+   };
+   // 粘贴按钮：读取剪贴板图片并自动识别（连续使用）
+   $("btn-paste").onclick = async () => {
+     try {
+       const items = await navigator.clipboard.read();
+       for (const item of items) {
+         const type = item.types.find((t) => t.startsWith("image/"));
+         if (type) {
+           const blob = await item.getType(type);
+           const c = document.createElement("canvas");
+           const im = new Image();
+           im.onload = async () => {
+             img = im; marks = []; showCanvas();
+             const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
+             const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
+             await doAutoRecognize(b64);
+           };
+           im.src = URL.createObjectURL(blob);
+           return;
+         }
+       }
+       $("marks-info").textContent = "剪贴板中没有图片";
+     } catch { $("marks-info").textContent = "读取剪贴板失败（可能需要手动粘贴）"; }
+   };
+   // 页面级粘贴（Ctrl+V）：加载图片后自动识别，实现连续使用
+   document.addEventListener("paste", (e) => {
+     for (const item of e.clipboardData.items) {
+       if (item.type.startsWith("image/")) {
+         const blob = item.getAsFile();
+         const im = new Image();
+         im.onload = async () => {
+           img = im; marks = []; showCanvas();
+           const c = document.createElement("canvas");
+           c.width = img.naturalWidth; c.height = img.naturalHeight;
+           c.getContext("2d").drawImage(img, 0, 0);
+           const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
+           const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
+           await doAutoRecognize(b64);
+         };
+         im.src = URL.createObjectURL(blob);
+         e.preventDefault();
+         return;
+       }
+     }
+   });
 
   // ---------- 结果渲染 ----------
   const VERDICTS = {
     free: ["✅ 免费字体", "命中开源白名单，可放心使用"],
     suspect: ["🤔 疑似免费", "与开源字体相似但非精确匹配"],
     risky: ["⚠️ 版权风险", "与白名单不匹配，大概率是商业版权字体"],
+    unknown: ["❓ 无法判断", "未识别到可比的字，需手动框选或更换截图"],
   };
 
   function renderResult(r) {
     $("result-empty").hidden = true;
     $("result").hidden = false;
-    if (r.error) { $("verdict").textContent = "错误：" + r.error; return; }
+    const v = $("verdict");
+    if (r.error) {
+      // 失败：上屏中性态，不残留上一条的判定颜色/内容（README：失败不残留）
+      v.className = "unknown";
+      v.innerHTML = `<span class="v-sub">❓ 识别失败：${esc(r.error)}</span>`;
+      $("candidates").innerHTML = "";
+      return;
+    }
+
+    // 字体名映射 font_id→名称：从响应自带候选+逐字 top 构建（避免图表渲染时 nameById 未定义导致误报“识别失败”且残留虚假判定）
+    const nameById = {};
+    (r.candidates || []).forEach((c) => { if (c && c.font_id && (c.name || c.font_id)) nameById[c.font_id] = c.name || c.font_id; });
+    (r.per_char || []).forEach((row) => (row.top || []).forEach((t) => { if (t && t.font_id && !nameById[t.font_id]) nameById[t.font_id] = t.name || t.font_id; }));
 
     const [label, desc] = VERDICTS[r.verdict] || ["?", ""];
-    const v = $("verdict");
     v.className = r.verdict;
-    v.innerHTML = `${label} <span style="font-size:13px;font-weight:normal">相似度 ${Math.round(r.confidence * 100)}% · ${r.elapsed}s · ${desc}（字形级比对，仅供参考）</span>`;
+    v.innerHTML = `${label} <span class="v-sub">相似度 ${Math.round(r.confidence * 100)}% · ${r.elapsed}s · ${desc}（字形级比对，仅供参考）</span>`;
 
-    $("candidates").innerHTML = r.candidates.map((c, i) => {
+    // ---------- 逐字比对：堆叠横条图（每个字一段，段内按候选字体得分比例着色）----------
+    const cnvColors = ["#3b6ef5", "#f7ba1e", "#7b61ff", "#10b981", "#ff7d00", "#ef4444", "#0fc6c2", "#fd18a8", "#98a2b8", "#722ed1"];
+    const cnvColorOf = (fid) => {
+      let h = 0;
+      for (let i = 0; i < fid.length; i++) h = ((h << 5) - h + fid.charCodeAt(i)) | 0;
+      return cnvColors[Math.abs(h) % cnvColors.length];
+    };
+    const pcAll = (r.per_char || []);
+    const concl = (r.candidates || [])[0];
+    const conclFid = concl ? concl.font_id : null;
+    const conclName = concl ? concl.name : "";
+    // 图例：颜色 → 字体名（按出现顺序去重）
+    const legend = [];
+    pcAll.forEach((row) => {
+      (row.top || []).forEach((t) => { if (t && !legend.some((l) => l.fid === t.font_id)) legend.push({ fid: t.font_id, name: nameById[t.font_id] || t.font_id }); });
+    });
+    const legendHtml = legend.map((l) => `<span class="pc-lg" title="${esc(l.name)}"><i style="background:${cnvColorOf(l.fid)}"></i>${esc(l.name)}</span>`).join("");
+    // 每个字一行：字符 + 堆叠条 + 顶选
+    const chartRows = pcAll.map((row) => {
+      const tops = (row.top || []).slice(0, 3).filter((t) => t);
+      if (!tops.length) return "";
+      const sum = tops.reduce((a, t) => a + Math.max(0, t.score), 0) || 1;
+      const segs = tops.map((t) => {
+        const w = Math.max(0, t.score) / sum * 100;
+        const nm = nameById[t.font_id] || t.font_id;
+        return `<span class="pc-seg" style="width:${w}%;background:${cnvColorOf(t.font_id)}" title="${esc(row.char)} → ${esc(nm)} ${Math.round(t.score * 100)}%"></span>`;
+      }).join("");
+      const t0 = tops[0];
+      const nm0 = nameById[t0.font_id] || t0.font_id;
+      const sameFont = t0.font_id === conclFid;
+      return `<div class="pc-row">
+          <span class="pc-char">${esc(row.char)}</span>
+          <span class="pc-bar">${segs}</span>
+          <span class="pc-top ${sameFont ? "pc-top-same" : "pc-top-diff"}" title="${sameFont ? "与汇总结论一致" : "与汇总结论不同"}">${esc(nm0)} ${Math.round(t0.score * 100)}%</span>
+        </div>`;
+    }).join("");
+    const diffs = pcAll.filter((row) => { const t = (row.top || [])[0]; return t && t.font_id !== conclFid; });
+    const pcHtml = (concl && pcAll.length) ? `<div class="pc-box">
+        <button type="button" class="pc-toggle" aria-expanded="false">
+          <span class="pc-arrow">▸</span>
+          ${VERDICTS[r.verdict]?.[0] || "汇总"} → <b>${esc(conclName)}</b>
+          <span class="pc-votes">${pcAll.length} 字投票</span>
+        </button>
+        <div class="pc-body" hidden>
+        ${pcAll.length <= 18 ? `<div class="pc-chart">${chartRows}</div>` : chartRows}
+        ${legendHtml ? `<div class="pc-legend">${legendHtml}</div>` : ""}
+        ${diffs.length ? `<div class="pc-detail">不同于汇总结论的字：${diffs.map((row) => {
+          const t = (row.top || [])[0];
+          if (!t) return "";
+          const nm = nameById[t.font_id] || t.font_id;
+          return `<span class="chip chip-diff">${esc(row.char)}→${esc(nm)}</span>`;
+        }).join(" ")}</div>` : ""}
+        </div>
+      </div>` : "";
+
+    // 按相似度降序展示（后端已排序，这里保险再排一次）
+    const sortedCands = [...(r.candidates || [])].sort((a, b) => b.score - a.score);
+    $("candidates").innerHTML = pcHtml + sortedCands.map((c, i) => {
       const pct = Math.round(c.score * 100);
-      const sample = c.sample_png_b64 ? `<img src="data:image/png;base64,${c.sample_png_b64}" alt="">` : "";
+      const sample = c.sample_png_b64 ? `<img src="data:image/png;base64,${esc(c.sample_png_b64)}" alt="">` : "";
       return `<div class="cand-card">${sample}
         <div class="info">
-          <div class="name">${i + 1}. ${c.name}</div>
-          <div class="meta">${c.license} · ${c.votes} 票 · <a href="${c.source_url}" target="_blank">来源</a></div>
+          <div class="name">${i + 1}. ${esc(c.name)}</div>
+          <div class="meta" title="${esc(c.name)} · ${esc(c.license)} 许可证 · ${c.votes} 票（识别到的字投给该字体的数量）"><a href="#" class="lic-link" data-lic="${esc(c.license)}">${esc(c.license)}</a> · <span title="${c.votes} 票 = 本次识别到的字中投给该字体的数量">${c.votes} 票</span> · <a href="${esc(c.source_url)}" target="_blank">来源</a></div>
           <div class="bar"><div style="width:${pct}%"></div></div>
         </div>
         <div class="score">${pct}%</div>
       </div>`;
     }).join("");
+
+    // 逐字汇总折叠条：点击展开/收起
+    document.querySelectorAll(".pc-toggle").forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const body = btn.parentElement.querySelector(".pc-body");
+        const open = body.hidden;
+        body.hidden = !open;
+        btn.setAttribute("aria-expanded", String(open));
+        btn.querySelector(".pc-arrow").textContent = open ? "▾" : "▸";
+      });
+    });
   }
 
-  // ---------- 历史 / 白名单弹层 ----------
-  $("modal-history").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("modal-history").hidden = true; });
+  // ---------- 白名单 / 关于弹层 ----------
   $("modal-fonts").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("modal-fonts").hidden = true; });
-  $("history-close").onclick = () => $("modal-history").hidden = true;
+  $("modal-about").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("modal-about").hidden = true; });
   $("fonts-close").onclick = () => $("modal-fonts").hidden = true;
+  $("about-close").onclick = () => $("modal-about").hidden = true;
+  $("btn-about").onclick = () => { $("modal-about").hidden = false; };
 
-  $("btn-history").onclick = async () => {
-    $("modal-history").hidden = false;
-    $("history-list").innerHTML = "<span class='muted'>加载中…</span>";
-    try {
-      const r = await (await fetch("/api/history")).json();
-      $("history-list").innerHTML = r.history.length
-        ? r.history.map(h => `<div class="hist-row"><span>${h.ts} · 「${h.chars.join("")}」</span>
-            <span class="v-${h.verdict}">${h.verdict === "free" ? "✅" : h.verdict === "suspect" ? "🤔" : "⚠️"} ${h.top} ${Math.round(h.score * 100)}%</span></div>`).join("")
-        : "<span class='muted'>暂无记录</span>";
-    } catch { $("history-list").innerHTML = "<span class='muted'>加载失败</span>"; }
+  // ---------- 开源协议说明弹层（点候选卡片里的协议名触发）----------
+  const LICENSE_INFO = {
+    "SIL-OFL": {
+      title: "SIL Open Font License 1.1",
+      html: `<p class="modal-note"><b>最常用的开源字体协议。</b>可以：</p>
+      <p class="modal-note">✅ 个人及商业免费使用 · ✅ 嵌入文档/网页/App · ✅ 自行修改（需改名）</p>
+      <p class="modal-note"><b>要求：</b>单独出售字体文件本身是被禁止的；修改版必须换名并以同协议发布。字体随软件打包分发时需附带许可证文本。</p>`,
+    },
+    "free-commercial": {
+      title: "免费商用授权",
+      html: `<p class="modal-note"><b>厂商自行声明的免费商用授权</b>（如站酷系列）。</p>
+      <p class="modal-note">✅ 个人及商业免费使用</p>
+      <p class="modal-note"><b>注意：</b>协议内容以官网声明为准，通常禁止单独出售字体文件、禁止包含在收费字体包里转售。</p>`,
+    },
+    "free": {
+      title: "自由字体许可",
+      html: `<p class="modal-note"><b>允许自由使用与分发的字体许可</b>（如 DejaVu Fonts License，类 BSD）。</p>
+      <p class="modal-note">✅ 个人及商业免费使用 · ✅ 修改与再分发</p>
+      <p class="modal-note"><b>要求：</b>保留版权与许可声明。</p>`,
+    },
   };
+  $("license-close").onclick = () => $("modal-license").hidden = true;
+  $("modal-license").addEventListener("click", (e) => { if (e.target === e.currentTarget) $("modal-license").hidden = true; });
+  document.addEventListener("click", (e) => {
+    const link = e.target.closest(".lic-link");
+    if (!link) return;
+    e.preventDefault();
+    const info = LICENSE_INFO[link.dataset.lic] || {
+      title: link.dataset.lic,
+      html: `<p class="modal-note">该字体使用自定义许可（${link.dataset.lic}），请点「来源」查看字体官方页面的授权说明。</p>`,
+    };
+    $("license-title").childNodes[0].textContent = info.title + " ";
+    $("license-body").innerHTML = info.html;
+    $("modal-license").hidden = false;
+  });
 
   $("btn-fonts").onclick = async () => {
     $("modal-fonts").hidden = false;
@@ -256,7 +444,7 @@
       const r = await (await fetch("/api/fonts")).json();
       $("fonts-count").textContent = r.fonts.length;
       $("fonts-list").innerHTML = r.fonts.map(f =>
-        `<div class="font-row"><span>${f.name} <span class="lic">${f.style}</span></span><span class="lic">${f.license}</span></div>`).join("");
+        `<div class="font-row"><span>${esc(f.name)} <span class="lic">${esc(f.style)}</span></span><span class="lic">${esc(f.license)}</span></div>`).join("");
     } catch { $("fonts-list").innerHTML = "<span class='muted'>加载失败</span>"; }
   };
 
@@ -266,11 +454,11 @@
     const results = [];
     try {
       // 1. 弹层初始状态：hidden 属性存在且实际不可见
-      const mh = $("modal-history"), mf = $("modal-fonts");
-      results.push(t("history-modal hidden attr", mh.hidden));
+      const mf = $("modal-fonts"), ma = $("modal-about");
       results.push(t("fonts-modal hidden attr", mf.hidden));
-      results.push(t("history-modal invisible", getComputedStyle(mh).display === "none"));
+      results.push(t("about-modal hidden attr", ma.hidden));
       results.push(t("fonts-modal invisible", getComputedStyle(mf).display === "none"));
+      results.push(t("about-modal invisible", getComputedStyle(ma).display === "none"));
       // 2. 打开白名单弹层
       mf.hidden = false;
       results.push(t("fonts-modal opens", !mf.hidden && getComputedStyle(mf).display !== "none"));
@@ -281,6 +469,11 @@
       mf.hidden = false;
       mf.dispatchEvent(new MouseEvent("click", { bubbles: true }));
       results.push(t("fonts-modal closes via backdrop", mf.hidden));
+      // 5. 关于弹层：按钮打开、标题含许可证声明
+      $("btn-about").click();
+      results.push(t("about-modal opens", !ma.hidden && /MIT License/.test(ma.innerHTML)));
+      $("about-close").click();
+      results.push(t("about-modal closes via button", ma.hidden));
       // 5. dropzone 初始可见、canvas 初始隐藏
       results.push(t("dropzone visible", !$("dropzone").hidden));
       results.push(t("canvas-wrap hidden", $("canvas-wrap").hidden));
@@ -289,10 +482,6 @@
         const fr = await fetch("/api/fonts"); const fj = await fr.json();
         results.push(t("api/fonts ok", fr.ok && fj.fonts.length > 0, `${fj.fonts.length} fonts`));
       } catch (e) { results.push(t("api/fonts ok", false, String(e))); }
-      try {
-        const hr = await fetch("/api/history"); const hj = await hr.json();
-        results.push(t("api/history ok", hr.ok && Array.isArray(hj.history)));
-      } catch (e) { results.push(t("api/history ok", false, String(e))); }
     } catch (e) {
       results.push(t("selftest crashed", false, String(e)));
     }

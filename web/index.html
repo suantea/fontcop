@@ -2,41 +2,62 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
 <title>FontCop — 字体版权快查</title>
 <link rel="stylesheet" href="/style.css">
 </head>
 <body>
 <header>
-  <h1>FontCop <span class="sub">字体版权快查</span></h1>
-  <nav>
-    <button id="btn-history" class="ghost">历史</button>
-    <button id="btn-fonts" class="ghost">白名单</button>
-  </nav>
+  <div class="header-inner">
+    <h1><span class="logo">F</span>FontCop <span class="sub">字体版权快查</span></h1>
+    <nav>
+      <button id="btn-fonts" class="ghost">🔤 开源字体清单</button>
+      <button id="btn-about" class="ghost">ℹ️ 关于</button>
+    </nav>
+  </div>
 </header>
 
 <main>
   <!-- 左：图片区 -->
   <section id="left">
     <div id="dropzone">
-      <p class="big">拖入图片 / ⌘V 粘贴截图</p>
-      <p class="hint">或 <button id="btn-file" class="link">选择文件</button></p>
+      <div class="dz-icon">
+        <svg width="56" height="56" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
+          <rect x="3" y="3" width="18" height="18" rx="3"/>
+          <circle cx="8.5" cy="8.5" r="1.5"/>
+          <path d="M21 15l-5-5L5 21"/>
+        </svg>
+      </div>
+      <p class="big">拖入图片，或 <kbd>Ctrl</kbd>+<kbd>V</kbd> 粘贴截图</p>
+      <p class="hint">或 <button id="btn-file" class="link">浏览文件</button></p>
+      <p class="hint2">支持 PNG / JPG / WebP，截图识别最佳</p>
       <input type="file" id="file-input" accept="image/*" hidden>
     </div>
 
     <div id="canvas-wrap" hidden>
-      <canvas id="canvas"></canvas>
+      <div id="canvas-view">
+        <canvas id="canvas"></canvas>
+      </div>
       <div class="toolbar">
         <span id="marks-info">已标注：无</span>
-        <button id="btn-auto" class="ghost">🔍 自动识别</button>
-        <button id="btn-run" class="primary" disabled>开始识别</button>
-        <button id="btn-reset" class="ghost">重置</button>
+        <div class="toolbar-btns">
+          <button id="btn-auto" class="ghost">🔍 自动识别</button>
+          <button id="btn-paste" class="ghost">📋 粘贴识别</button>
+          <button id="btn-reset" class="ghost">重置</button>
+          <button id="btn-run" class="primary" disabled>开始识别</button>
+        </div>
       </div>
+      <p class="tip">在图上拖框选字 → 输入该字 → 点「开始识别」；点已有框可删除。或直接「自动识别」免框选。</p>
     </div>
   </section>
 
   <!-- 右：结果区 -->
   <section id="right">
-    <div id="result-empty" class="muted">识别结果将显示在这里</div>
+    <div id="result-empty">
+      <div class="re-icon">🧐</div>
+      <p>识别结果将显示在这里</p>
+      <p class="re-sub">左侧载入截图并开始识别</p>
+    </div>
     <div id="result" hidden>
       <div id="verdict"></div>
       <div id="candidates"></div>
@@ -49,25 +70,40 @@
   <p>框选的字是：</p>
   <input id="char-input" maxlength="4" autocomplete="off" placeholder="输入这个字，如 锋">
   <div>
-    <button id="char-ok" class="primary">确定</button>
     <button id="char-cancel" class="ghost">取消</button>
+    <button id="char-ok" class="primary">确定</button>
   </div>
 </div>
 
-<!-- 历史弹层 -->
-<div id="modal-history" class="modal" hidden>
-  <div class="modal-box">
-    <h3>识别历史 <button class="ghost" id="history-close">关闭</button></h3>
-    <div id="history-list"></div>
-  </div>
-</div>
-
-<!-- 白名单弹层 -->
+<!-- 开源字体清单弹层 -->
 <div id="modal-fonts" class="modal" hidden>
   <div class="modal-box">
-    <h3>开源字体名单 <button class="ghost" id="fonts-close">关闭</button></h3>
+    <h3>开源字体名单 <button class="ghost modal-close" id="fonts-close">✕</button></h3>
     <p class="modal-note">共 <span id="fonts-count">-</span> 款 · 本软件版权所有：李享骏 · <a href="https://my-ichery.feishu.cn/drive/folder/EONWfDeCElRaPNdJf9VcorTgn3e?from=from_copylink" target="_blank">字体下载地址</a></p>
     <div id="fonts-list"></div>
+  </div>
+</div>
+
+<!-- 开源协议说明弹层 -->
+<div id="modal-license" class="modal" hidden>
+  <div class="modal-box">
+    <h3 id="license-title">开源协议 <button class="ghost modal-close" id="license-close">✕</button></h3>
+    <div id="license-body"></div>
+  </div>
+</div>
+
+<!-- 关于弹层 -->
+<div id="modal-about" class="modal" hidden>
+  <div class="modal-box">
+    <h3>关于 FontCop <button class="ghost modal-close" id="about-close">✕</button></h3>
+    <p class="modal-note">作者：李享骏　版本：v1.0<br>
+    本软件为开源项目，遵循 MIT License。</p>
+    <p class="modal-note">识别结果为字形级比对，仅供参考，不构成法律意见。</p>
+    <p class="modal-note"><b>第三方开源组件</b>（遵循其各自许可证）：<br>
+    RapidOCR (Apache-2.0) · ONNX Runtime (MIT) · Pillow (PIL/HPND) · NumPy (BSD-3) · SciPy (BSD-3) · pystray (LGPL-3.0)</p>
+    <p class="modal-note"><b>内置字体</b>（遵循其各自许可证，详见各字体来源）：<br>
+    思源黑体/宋体、Noto Sans/Serif CJK、霞鹜文楷、得意黑、Inter、JetBrains Mono (SIL-OFL 1.1) · 站酷快乐体/小薇体（站酷免费商用授权）· DejaVu Sans（DejaVu Fonts License）</p>
+    <p class="modal-note">感谢以上所有开源贡献者。</p>
   </div>
 </div>
 
