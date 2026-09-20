@@ -1,4 +1,6 @@
 """识别管线：预处理 → 粗排(IoU top50) → 精排(SDF+NCC top5) → 多字投票 → 三档判定。"""
+from __future__ import annotations
+
 import json
 from dataclasses import dataclass, field
 from pathlib import Path
@@ -6,14 +8,13 @@ from pathlib import Path
 import numpy as np
 
 from src.features import (
-    THRESHOLD_FREE,
-    THRESHOLD_SUSPECT,
     hog,
     hog_similarity,
     iou_similarity,
     ncc_aligned,
     ncc_similarity,
     sdf,
+    verdict_of,
 )
 from src.render import FINAL_SIZE, render_char
 
@@ -26,20 +27,26 @@ _MIN_VALID = 0.55  # 最低可信分数：低于此值的候选视为"不可信�
 # （实测：同字体同字 ≥0.9；标错字 ~0.45；纯噪声 ~0.2。0.55 可靠分隔真匹配与噪声）
 
 # 同源字体组：字形完全相同（NCC=1.0 实测），归并为一组，命中时合并展示
+# 每组的第一个成员为展示代表（优先中文名：思源系列；系统字体组除外）
 DUP_GROUPS = [
-    {"noto-serif-cjk", "source-han-serif"},
-    {"noto-sans-cjk", "source-han-sans"},
-    {"system-0", "system-1"},   # 黑體-繁/簡（STHeiti 同 TTC）
-    {"system-2", "system-3"},   # 宋體-簡/繁（Songti 同 TTC）
+    ("source-han-serif", "noto-serif-cjk"),
+    ("source-han-sans", "noto-sans-cjk"),
+    ("system-0", "system-1"),   # 黑體-繁/簡（STHeiti 同 TTC）
+    ("system-2", "system-3"),   # 宋體-簡/繁（Songti 同 TTC）
 ]
 
 
 def _group_of(font_id: str) -> str:
-    """字体所属同源组 key；无组则返回自身。"""
+    """字体所属同源组的代表 font_id（组内第一个成员）；无组返回自身。"""
     for g in DUP_GROUPS:
         if font_id in g:
-            return "|".join(sorted(g))
+            return g[0]
     return font_id
+
+
+def group_representative(font_id: str) -> str:
+    """同源组的代表 font_id（用于展示层合并）；无组返回自身。"""
+    return _group_of(font_id)
 
 
 @dataclass
@@ -113,26 +120,29 @@ class Matcher:
     # ---------- 多字投票（按同源组归并）----------
     def match(self, marks: list[dict]) -> MatchResult:
         """marks: [{image: 灰度np.ndarray, char: str}, ...]"""
-        group_scores: dict[str, list[float]] = {}   # 组key -> 加权得分列表
-        group_rep: dict[str, str] = {}              # 组key -> 代表字体（首个命中）
+        group_scores: dict[str, list[float]] = {}   # 代表font_id -> 加权得分列表
         per_char = []
         for m in marks:
             tops = self.match_char(m["image"], m["char"])
-            per_char.append({"char": m["char"], "top": [
-                {"font_id": f, "score": round(s, 4)} for f, s in tops
-            ]})
+            # 逐字 top 映射到同源代表（noto-serif-cjk → source-han-serif），
+            # 展示层统一显示中文名，避免同源字体以英文名重复出现
+            mapped = [{"font_id": _group_of(f),
+                       "name": self.meta.get(_group_of(f), {}).get("name", _group_of(f)),
+                       "score": round(s, 4)} for f, s in tops]
+            per_char.append({"char": m["char"], "top": mapped})
             for rank, (fid, s) in enumerate(tops):
                 g = _group_of(fid)
                 # 排名加权：Top1 权重 1.0，依次衰减
                 w = s * (1.0 - 0.15 * rank)
                 group_scores.setdefault(g, []).append(w)
-                group_rep.setdefault(g, fid)
 
         if not group_scores:
-            return MatchResult(verdict="risky", confidence=0.0)
+            # 0 票（如框选的字不在索引字符集内）：无可比对证据，
+            # 按设计返回中性 unknown，绝不兜底 risky（用户反馈过的坑）
+            return MatchResult(verdict="unknown", confidence=0.0, per_char=per_char)
 
         cands = sorted(
-            (Candidate(group_rep[g], float(np.mean(v)), len(v))
+            (Candidate(g, float(np.mean(v)), len(v))
              for g, v in group_scores.items()),
             key=lambda c: -c.score,
         )
@@ -140,16 +150,10 @@ class Matcher:
         # 避免误导用户。宁可输出"无匹配"也不给一个荒谬的第一名。
         cands = [c for c in cands if c.score >= _MIN_VALID][:_TOP_K]
         if not cands:
-            return MatchResult(verdict="risky", confidence=0.0,
+            return MatchResult(verdict="unknown", confidence=0.0,
                                per_char=per_char)
         best = cands[0]
-        if best.score >= THRESHOLD_FREE:
-            verdict = "free"
-        elif best.score >= THRESHOLD_SUSPECT:
-            verdict = "suspect"
-        else:
-            verdict = "risky"
-        return MatchResult(verdict, round(best.score, 4), cands, per_char)
+        return MatchResult(verdict_of(best.score), round(best.score, 4), cands, per_char)
 
 
 def _downsample64(b: np.ndarray) -> np.ndarray:
@@ -196,13 +200,11 @@ def _binarize_crop(gray: np.ndarray) -> np.ndarray | None:
     a = np.asarray(gray, dtype=np.uint8)
     if a.ndim == 3:
         a = a[..., :3].mean(axis=-1).astype(np.uint8)
-    # 在整幅原图上做 Otsu + 极性判断（紧裁前），再对二值掩膜紧裁
     thr = _otsu_threshold(a)
     dark = a <= thr
-    border = np.ones(a.shape, dtype=bool)
-    border[2:-2, 2:-2] = False
-    bg_is_dark = dark[border].sum() >= (~dark)[border].sum()
-    ink = ~dark if bg_is_dark else dark
+    # 极性按多数类判定：墨色(笔画)通常占少数
+    # （不用边框环形判定：裁剪紧贴笔画时边框会混入笔画像素，造成极性反转）
+    ink = ~dark if dark.sum() > dark.size - dark.sum() else dark
     if not ink.any():
         return None
     ys, xs = np.where(ink)

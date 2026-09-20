@@ -4,6 +4,8 @@
 横向投影切分单字，取面积最大的若干字作为比对对象。
 仅在安装了 rapidocr_onnxruntime 时可用；未安装则前端退回手动模式。
 """
+from __future__ import annotations
+
 import io
 from pathlib import Path
 
@@ -11,7 +13,8 @@ import base64
 import numpy as np
 from PIL import Image
 
-from src.pipeline import Matcher
+from src.pipeline import Matcher, _group_of
+from src.features import verdict_of
 
 _ocr = None
 
@@ -32,11 +35,13 @@ def get_ocr():
     return _ocr
 
 
-def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_per_line: int = 5) -> dict:
-    """整图自动识别：OCR 检测行 → 切字 → 逐字比对 → 投票。
+def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_per_line: int = 20) -> dict:
+    """整图自动识别：OCR 检测行 → 切字/逐段搜索 → 投票。
 
     OCR 对小图/单字/贴边文字检测不稳：依次尝试 [原图放大2x, 原图]，
-    取首个有结果的尺度；都失败才报"未检测到文字"。
+    取首个有结果的尺度；都失败才走逐段兜底。
+    每行：列投影段数与 OCR 文本长度对齐时按文本切字（字符引导）；
+    段数明显多于文本字符（OCR 漏读，如字母间距大）时，改逐段全索引搜索投票。
     """
     img_bytes = base64.b64decode(image_b64)
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -44,8 +49,9 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
 
     result = None
     arr = None
-    # 尺度从大到小试：小图放大提升检测率，大图原样即可
-    for scale in (2.0, 1.0) if max(im.size) < 400 else (1.0, 2.0):
+    # 尺度从大到小试：小图放大提升检测率，大图原样即可；加 1.5x 中间尺度提高中等尺寸文字的检出率
+    scales = (2.5, 2.0, 1.5, 1.0) if max(im.size) < 400 else (1.0, 1.5, 2.0, 2.5)
+    for scale in scales:
         w, h = int(im.width * scale), int(im.height * scale)
         if w < 8 or h < 8:
             continue
@@ -60,14 +66,16 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
             break
 
     if not result:
-        # OCR 兜底：小图/单字检测不出时，假设整图就是一个字，
-        # 对全部字体×全部字做向量化 IoU 搜索（~30ms），取最高分候选。
-        return _fallback_single_glyph(matcher, im)
+        # OCR 兜底：小图/单字检测不出时，不依赖文字内容，按列投影切字，
+        # 逐段对全部字体×全部字做向量化 IoU 搜索（~30ms/段），按字体投票。
+        return _fallback_line(matcher, im)
 
     # 按检测框面积降序，取前 max_lines 行
     boxes = sorted(result, key=lambda r: (r[0][2][0] - r[0][0][0]) * (r[0][2][1] - r[0][0][1]), reverse=True)[:max_lines]
 
     marks = []
+    per_font: dict[str, dict] = {}
+    per_seg: list[dict] = []
     for box, text, score in boxes:
         if float(score) < 0.6:
             continue
@@ -77,11 +85,43 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
         crop = arr[max(0, y0):y1, max(0, x0):x1]
         if crop.size == 0:
             continue
-        chars = _split_chars(crop, text[:max_chars_per_line])
-        marks.extend(chars)
+        chars = _usable_chars(text[:max_chars_per_line])
+        if not chars:
+            continue
+        gray = crop.mean(axis=-1).astype(np.uint8) if crop.ndim == 3 else crop
+        ink = _ink_mask(gray)
+        segs = _column_segs(ink) if ink is not None else []
+        if len(segs) >= 2 and len(segs) > len(chars) + 1:
+            # OCR 漏读（如字母间距大）：文本长度不够，逐段全索引搜索投票
+            pf, ps = _mask_votes(matcher, ink)
+            _merge_votes(per_font, pf)
+            per_seg.extend(ps)
+        else:
+            marks.extend(_split_chars(crop, text[:max_chars_per_line]))
+
+    if per_font:
+        # 可用的字符引导票也并入（补足逐段搜索可能漏掉的段）
+        for m in marks:
+            tops = matcher.match_char(m["image"], m["char"])
+            if tops and tops[0][1] >= _MIN_AUTO:
+                fid, s = tops[0]
+                g = _group_of(fid)   # 并入时归并到同源代表
+                d = per_font.setdefault(g, {"scores": [], "chars": []})
+                d["scores"].append(s)
+                d["chars"].append(m["char"])
+                per_seg.append({"char": m["char"], "top": [
+                    {"font_id": _group_of(t[0]),
+                     "name": matcher.meta.get(_group_of(t[0]), {}).get("name", _group_of(t[0])),
+                     "score": round(t[1], 4)} for t in tops[:3]]})
+        return _assemble(matcher, per_font, per_seg)
 
     if not marks:
-        return {"error": "未能切出可用单字"}
+        # OCR 框出的文字全部被 _usable_chars 过滤（标点误读/无可用字）：
+        # 无可比对的字 → 按设计返回中性 unknown，不判版权
+        return {"verdict": "unknown", "confidence": 0.0,
+                "candidates": [], "per_char": [], "auto": True,
+                "note": "OCR 识别到文字但无可比对的字（标点/噪声被过滤）：无法判断",
+                "fallback": True}
 
     result_match = matcher.match(marks)
     from src.server import _candidate_sample  # 复用样张渲染
@@ -110,69 +150,174 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
     }
 
 
-def _fallback_single_glyph(matcher: Matcher, im: Image.Image) -> dict:
-    """OCR 检测失败时的兜底：把整图当作单个字，与索引内全部字体×全部字符
-    做向量化 IoU 全搜索，取最高分字符再走精排。约 30ms。"""
-    from src.pipeline import _binarize_crop, _downsample64, _upsample128, _group_of
-    from src.features import (
-        iou_similarity, ncc_aligned, hog, hog_similarity, sdf,
-        THRESHOLD_SUSPECT,
-    )
+def _seg_img(mask: np.ndarray, x0: int, x1: int) -> np.ndarray | None:
+    """掩膜段 [x0,x1) 紧裁等比缩放 → 128×128 二值图（0/1 uint8）。"""
+    from PIL import Image as PILImage
+    from src.render import FINAL_SIZE
+    sub = mask[:, x0:x1]
+    rows = np.where(sub.any(axis=1))[0]
+    if not len(rows):
+        return None
+    sub = sub[rows.min():rows.max() + 1]
+    h, w = sub.shape
+    scale = min(FINAL_SIZE / h, FINAL_SIZE / w)
+    nh, nw = max(1, round(h * scale)), max(1, round(w * scale))
+    img = PILImage.fromarray(sub.astype(np.uint8) * 255).resize((nw, nh), PILImage.BILINEAR)
+    c = PILImage.new("L", (FINAL_SIZE, FINAL_SIZE), 0)
+    c.paste(img, ((FINAL_SIZE - nw) // 2, (FINAL_SIZE - nh) // 2))
+    return (np.asarray(c, dtype=np.uint8) > 32).astype(np.uint8)
 
-    gray = np.asarray(im.convert("L"), dtype=np.uint8)
-    b = _binarize_crop(gray)
-    if b is None:
-        return {"error": "图中未检测到文字（尝试了 OCR 与整体字形比对）"}
+
+def _vsearch(matcher: Matcher, b: np.ndarray) -> list[tuple[str, str, float]]:
+    """单字二值图 → 全索引 (font×char) 向量化 IoU 粗筛 top10 → SDF+NCC+HOG 精排。"""
+    from src.pipeline import _downsample64, _upsample128
+    from src.features import hog, hog_similarity, ncc_aligned, sdf
 
     b64 = _downsample64(b)
-    glyphs = matcher.glyphs                      # [F, C, 64, 64]
-    inter = np.logical_and(b64[None, None], glyphs).sum(axis=(-2, -1))
-    union = np.logical_or(b64[None, None], glyphs).sum(axis=(-2, -1))
+    inter = np.logical_and(b64[None, None], matcher.glyphs).sum(axis=(-2, -1))
+    union = np.logical_or(b64[None, None], matcher.glyphs).sum(axis=(-2, -1))
     iou = np.where(union > 0, inter / np.maximum(union, 1), 0.0)
 
-    qi = sdf(b)
-    qh = hog(b)
-    # 取 IoU top-10 (font, char) 做精排
-    flat = iou.ravel()
-    tops = np.argsort(flat)[::-1][:10]
+    qi, qh = sdf(b), hog(b)
     refined = []
-    for k in tops:
+    for k in np.argsort(iou.ravel())[::-1][:10]:
         fi, ci = int(k) // len(matcher.chars), int(k) % len(matcher.chars)
         s_sdf = ncc_aligned(qi, matcher.sdfs[fi, ci])
-        s_hog = hog_similarity(qh, hog(_upsample128(glyphs[fi, ci])))
+        s_hog = hog_similarity(qh, hog(_upsample128(matcher.glyphs[fi, ci])))
         s = (1.0 - _HOG_W_AUTO) * s_sdf + _HOG_W_AUTO * s_hog
         refined.append((matcher.font_ids[fi], matcher.chars[ci], float(s)))
     refined.sort(key=lambda x: -x[2])
+    return refined
 
-    best_font, best_char, best_s = refined[0]
-    if best_s < _MIN_AUTO:
+
+def _ink_mask(gray: np.ndarray) -> np.ndarray | None:
+    """灰度图 → 文字掩膜（bool）。自动判定极性；空图返回 None。"""
+    from src.pipeline import _otsu_threshold
+    a = np.asarray(gray, dtype=np.uint8)
+    thr = _otsu_threshold(a)
+    dark = a <= thr
+    # 极性按多数类判定（与 _binarize_crop 一致），墨色占少数视为笔画
+    ink = dark if dark.sum() <= dark.size - dark.sum() else ~dark
+    return ink if ink.any() else None
+
+
+def _column_segs(ink: np.ndarray) -> list[tuple[int, int]]:
+    """按列投影切段（连续 ink 列、最小 5 列、剔除过窄段）。"""
+    col_ink = ink.sum(axis=0)
+    segs, start = [], None
+    for i, v in enumerate(col_ink > 0):
+        if v and start is None:
+            start = i
+        elif not v and start is not None:
+            if i - start > 4:
+                segs.append((start, i))
+            start = None
+    if start is not None:
+        segs.append((start, len(col_ink)))
+    if not segs:
+        return []
+    widths = [b - a for a, b in segs]
+    med_w = sorted(widths)[len(widths) // 2]
+    return [(a, b) for (a, b), w in zip(segs, widths) if w > med_w * 0.35]
+
+
+def _sub_wide(ink: np.ndarray, x0: int, x1: int) -> list[tuple[int, int]]:
+    """单个列段过宽（多字母粘连成整块）时按等宽细分，返回子段坐标列表。
+    宽高比超过约 1.35 视为粘连（拉丁字母宽高比一般 ≈0.6-0.9）。"""
+    rows = np.where(ink[:, x0:x1].any(axis=1))[0]
+    if not len(rows):
+        return []
+    h = rows.max() - rows.min() + 1
+    w = x1 - x0
+    n = max(1, int(np.ceil(w / max(h * 0.6, 1))))
+    if n <= 1:
+        return [(x0, x1)]
+    return [(x0 + w * i // n, x0 + w * (i + 1) // n) for i in range(n)]
+
+
+def _mask_votes(matcher: Matcher, ink: np.ndarray) -> tuple[dict[str, dict], list[dict]]:
+    """掩膜逐段全索引搜索 → (per_font 投票表, per_seg 逐段结果列表)。"""
+    per_font: dict[str, dict] = {}
+    per_seg: list[dict] = []
+    for x0, x1 in _column_segs(ink):
+        for a, b in _sub_wide(ink, x0, x1):
+            seg = _seg_img(ink, a, b)
+            if seg is None:
+                continue
+            refined = _vsearch(matcher, seg)
+            if not refined or refined[0][2] < _MIN_AUTO:
+                continue
+            fid, ch, s = refined[0]
+            if not _usable_chars(ch):
+                continue  # 无字符引导的兜底搜索：标点结果不可信，丢弃
+            g = _group_of(fid)   # 同源字体（noto/source-han 等）归并到代表
+            d = per_font.setdefault(g, {"scores": [], "chars": []})
+            d["scores"].append(s)
+            d["chars"].append(ch)
+            per_seg.append({
+                "char": ch,
+                "top": [{"font_id": _group_of(f),
+                         "name": matcher.meta.get(_group_of(f), {}).get("name", _group_of(f)),
+                         "score": round(sc, 4)} for f, _, sc in refined[:3]],
+            })
+    return per_font, per_seg
+
+
+def _merge_votes(target: dict[str, dict], src: dict[str, dict]) -> None:
+    for fid, d in src.items():
+        t = target.setdefault(fid, {"scores": [], "chars": []})
+        t["scores"].extend(d["scores"])
+        t["chars"].extend(d["chars"])
+
+
+def _assemble(matcher: Matcher, per_font: dict[str, dict], per_seg: list[dict] | None = None) -> dict:
+    """按字体投票聚合 → 结果字典（逐段搜索/混合路径共用）。"""
+
+    if not per_font:
         return {
-            "verdict": "risky", "confidence": 0.0,
+            "verdict": "unknown", "confidence": 0.0,
             "candidates": [], "per_char": [], "auto": True,
-            "fallback": True, "note": "整体字形与白名单差异过大",
+            "fallback": True, "note": "该截图没有可比的字（0 个可比字）：无法判断，不回退版权结论",
         }
 
+    items = sorted(per_font.items(),
+                   key=lambda kv: (-len(kv[1]["scores"]), -float(np.mean(kv[1]["scores"]))))
+    best_s = float(np.mean(items[0][1]["scores"]))
+
     candidates = []
-    for fid, ch, s in refined[:5]:
+    for fid, d in items[:5]:
         meta = matcher.meta.get(fid, {})
         candidates.append({
             "font_id": fid, "name": meta.get("name", fid),
             "license": meta.get("license", ""),
             "source_url": meta.get("source_url", ""),
-            "score": round(s, 4), "votes": 1,
-            "char_matched": ch,
-            "sample_png_b64": _candidate_sample(
-                _glyph_path(matcher, fid), ch),
+            "score": round(float(np.mean(d["scores"])), 4), "votes": len(d["scores"]),
+            "char_matched": d["chars"][0],
+            "sample_png_b64": _candidate_sample(_glyph_path(matcher, fid), d["chars"][0]),
         })
-    best_s = candidates[0]["score"]
-    verdict = ("free" if best_s >= THRESHOLD_SUSPECT and best_s >= 0.9
-               else "suspect" if best_s >= THRESHOLD_SUSPECT else "risky")
+    verdict = verdict_of(best_s)
+    chars_used = []
+    for fid, d in items:
+        for ch in d["chars"]:
+            if ch not in chars_used:
+                chars_used.append(ch)
     return {
         "verdict": verdict, "confidence": best_s,
-        "candidates": candidates, "per_char": [], "auto": True,
+        "candidates": candidates, "per_char": per_seg or [], "auto": True,
         "fallback": True,
-        "chars_used": [candidates[0]["char_matched"]],
+        "chars_used": chars_used,
     }
+
+
+def _fallback_line(matcher: Matcher, im: Image.Image) -> dict:
+    """OCR 无结果时的兜底：不依赖文字内容，按列投影切字，逐段全索引搜索后按字体投票。
+    整图只剩一段时退化为单字搜索（原行为）。"""
+    gray = np.asarray(im.convert("L"), dtype=np.uint8)
+    ink = _ink_mask(gray)
+    if ink is None:
+        return {"error": "图中未检测到文字（尝试了 OCR 与整体字形比对）"}
+    per_font, per_seg = _mask_votes(matcher, ink)
+    return _assemble(matcher, per_font, per_seg)
 
 
 def _HOG_W_AUTO():
@@ -197,41 +342,34 @@ def _candidate_sample(font_path: str, ch: str) -> str | None:
 _MIN_AUTO = 0.60  # 兜底路径最低可信分（无多字投票，取略高于 0.55）
 
 
+def _usable_chars(text: str) -> list[str]:
+    """只保留可做字形比对的字符：字母/数字/汉字。
+    OCR 常把 logo 里的字形误读成标点（如 ' ，：】【），这些参与比对只会产生垃圾票。"""
+    return [c for c in text if c.isalnum() or "\u4e00" <= c <= "\u9fff"]
+
+
 def _split_chars(line_img: np.ndarray, text: str) -> list[dict]:
     """行图横向投影切字，返回 [{image: 灰度图, char: ch}]。
     字符数与 OCR 文本对齐；比例失衡时放弃该行（避免错位比对）。
     容错：seg 数与 text 不等时尝试合并最窄相邻段，仍不等则放弃。
+    新增：当段数少于字符数时（粘连导致漏切），等宽按字符数切分以保留全部字符。
     """
     gray = line_img.mean(axis=-1).astype(np.uint8) if line_img.ndim == 3 else line_img
-    from src.pipeline import _otsu_threshold
-    thr = _otsu_threshold(gray)
-    dark = gray <= thr
-    border = np.ones(gray.shape, dtype=bool)
-    border[2:-2, 2:-2] = False
-    ink = ~dark if dark[border].sum() >= (~dark)[border].sum() else dark
-
-    col_ink = ink.sum(axis=0)
-    has_ink = col_ink > 0
-    # 连续非零段 = 单字
-    segs, start = [], None
-    for i, v in enumerate(has_ink):
-        if v and start is None:
-            start = i
-        elif not v and start is not None:
-            if i - start > 4:
-                segs.append((start, i))
-            start = None
-    if start is not None:
-        segs.append((start, len(has_ink)))
-
+    ink = _ink_mask(gray)
+    if ink is None:
+        return []
+    segs = _column_segs(ink)
     if not segs:
         return []
-    widths = [b - a for a, b in segs]
-    med_w = sorted(widths)[len(widths) // 2]
-    segs = [(a, b) for (a, b), w in zip(segs, widths) if w > med_w * 0.35]
 
-    # 容错：段数多于字符时，合并最窄的相邻段
-    while len(segs) > len(text) and len(segs) >= 2:
+    # 只保留可做字形比对的字符（字母/数字/汉字），标点噪声不参与
+    chars = _usable_chars(text)
+    if not chars:
+        return []
+
+    # ---------- 案例 A：段数 >= 字符数（可能过切） ----------
+    # 容错：段数多于字符时，合并最窄相邻段
+    while len(segs) > len(chars) and len(segs) >= 2:
         min_w = float('inf')
         min_i = -1
         for i in range(len(segs) - 1):
@@ -241,13 +379,29 @@ def _split_chars(line_img: np.ndarray, text: str) -> list[dict]:
         segs[min_i] = (segs[min_i][0], segs[min_i + 1][1])
         segs.pop(min_i + 1)
 
-    if len(segs) != len(text):
-        return []  # 仍无法对齐，放弃该行
+    # ---------- 案例 B：段数 < 字符数（粘连导致漏切） ----------
+    if len(segs) < len(chars):
+        # 尝试基于 OCR 文本长度进行等宽切分
+        rows = np.where(ink.any(axis=1))[0]
+        cols = np.where(ink.any(axis=0))[0]
+        if len(rows) and len(cols):
+            y0, y1 = int(rows.min()), int(rows.max()) + 1
+            x0, x1 = int(cols.min()), int(cols.max()) + 1
+            marks = []
+            for i, ch in enumerate(chars):
+                a = x0 + (x1 - x0) * i // len(chars)
+                b = x0 + (x1 - x0) * (i + 1) // len(chars)
+                sub = gray[y0:y1, max(a, x0):min(b, x1)]
+                if sub.size:
+                    marks.append({"image": sub, "char": ch})
+            if len(marks) == len(chars):
+                return marks
+        # 等宽切分仍不可用 → 放弃该行
+        return []
 
+    # ---------- 案例 C：段数 == 字符数 ----------
     marks = []
-    for (a, b), ch in zip(segs, text):
-        if not ch.strip():
-            continue
+    for (a, b), ch in zip(segs, chars):
         rows = np.where(ink[:, a:b].any(axis=1))[0]
         if len(rows) == 0:
             continue

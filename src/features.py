@@ -1,6 +1,7 @@
 """特征提取与相似度计算：二值图、IoU（粗排）、SDF+NCC（精排）。"""
 import numpy as np
-from scipy.ndimage import distance_transform_edt
+
+from src.edt import distance_transform_edt
 
 SIZE = 128          # 渲染/比对主尺寸
 SDF_SIZE = 64       # 索引存储的 SDF 尺寸（省内存）
@@ -49,11 +50,19 @@ def ncc_similarity(a: np.ndarray, b: np.ndarray) -> float:
 
 def ncc_aligned(a: np.ndarray, b: np.ndarray, max_shift: int = 2) -> float:
     """带小范围平移搜索的 NCC：对截图裁剪的 1-2px 偏移鲁棒。
-    在 ±max_shift 的整数平移中取最大相似度。"""
+    在 ±max_shift 的整数平移中取最大相似度。
+    用零填充平移（而非 np.roll）——roll 会把越界像素卷到对侧产生虚假相关峰。
+    """
     best = 0.0
     for dy in range(-max_shift, max_shift + 1):
         for dx in range(-max_shift, max_shift + 1):
-            shifted = np.roll(np.roll(b, dy, axis=0), dx, axis=1)
+            shifted = np.zeros_like(b)
+            # 平移 b 使 (dy,dx) 处内容对齐到 (0,0)；零填充处理越界
+            y0, y1 = max(0, dy), min(b.shape[0], b.shape[0] + dy)
+            x0, x1 = max(0, dx), min(b.shape[1], b.shape[1] + dx)
+            sy0, sy1 = max(0, -dy), min(b.shape[0], b.shape[0] - dy)
+            sx0, sx1 = max(0, -dx), min(b.shape[1], b.shape[1] - dx)
+            shifted[y0:y1, x0:x1] = b[sy0:sy1, sx0:sx1]
             best = max(best, ncc_similarity(a, shifted))
     return best
 
@@ -92,3 +101,15 @@ def hog_similarity(a: np.ndarray, b: np.ndarray) -> float:
 # 三档判定阈值（SDF+NCC 相似度）
 THRESHOLD_FREE = 0.90      # ≥0.90 → ✅ 免费
 THRESHOLD_SUSPECT = 0.75   # ≥0.75 → 🤔 疑似；否则 ⚠️ 版权风险
+
+
+def verdict_of(score: float) -> str:
+    """相似度分数 → 三态判定（free/suspect/risky）。
+    注意：'unknown' 是『无可比对的字』的独立语义（由调用方在 0 票/0 可比字时返回），
+    不在此函数内产生——避免『没证据却判版权』。
+    """
+    if score >= THRESHOLD_FREE:
+        return "free"
+    if score >= THRESHOLD_SUSPECT:
+        return "suspect"
+    return "risky"

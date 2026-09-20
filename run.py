@@ -25,6 +25,8 @@ def main() -> int:
     os.environ.setdefault("FONTOP_ROOT", str(root))
     if getattr(sys, 'frozen', False):
         os.environ.setdefault("FONTOP_MEIPASS", str(Path(sys._MEIPASS)))
+    # 浏览器模式（最终方案）：启动本地服务并自动打开默认浏览器网页。
+    # 不再用 pywebview 桌面壳——WebView2 环境差异会导致别人机器上样式丢失/无法运行。
     from src.server import main as server_main
     server_main()
     return 0

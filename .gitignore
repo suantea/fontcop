@@ -19,5 +19,17 @@ fonts/system_fonts.json
 fonts/symbols.json
 fonts/coverage.json
 
+# 临时/日志/调试残留（误重定向、探针、自检截图）
+*.log
+nul
+_tmp_*
+_probe*
+*.bak
+*.bak3
+
 # 系统
 .DS_Store
+
+# AtomCode local-scope configs (machine-specific)
+.atomcode/
+.anchors/

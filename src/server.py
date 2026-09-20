@@ -2,6 +2,8 @@
 
 启动：python -m src.server   （默认 http://127.0.0.1:8642）
 """
+from __future__ import annotations
+
 import base64
 import io
 import json
@@ -50,13 +52,22 @@ def get_matcher() -> Matcher:
 
 
 def _candidate_sample(font_path: str, ch: str) -> str | None:
-    """渲染候选字体同字样张 → PNG base64。"""
+    """渲染候选字体同字样张 → PNG base64。
+    白底黑字主题：白背景 + 黑色字形，且字形略缩小（四周留白）提升阅读性。"""
     from src.render import render_char
     g = render_char(font_path, ch)
     if g is None:
         return None
+    glyph = (g * 255).astype(np.uint8)          # 黑字（0）
+    glyph_img = Image.fromarray(glyph)
+    # 字形缩小 ~72% 并居中，四周留白 → “字体缩小一圈”
+    gw, gh = glyph_img.size
+    nw, nh = max(1, round(gw * 0.72)), max(1, round(gh * 0.72))
+    glyph_img = glyph_img.resize((nw, nh), Image.LANCZOS)
+    canvas = Image.new("L", (gw, gh), 255)      # 白底
+    canvas.paste(glyph_img, ((gw - nw) // 2, (gh - nh) // 2))
     buf = io.BytesIO()
-    Image.fromarray(g * 255).save(buf, format="PNG")
+    canvas.convert("RGB").save(buf, format="PNG")
     return base64.b64encode(buf.getvalue()).decode()
 
 
@@ -135,15 +146,20 @@ class Handler(BaseHTTPRequestHandler):
         path = self.path.split("?", 1)[0]
         if path == "/api/fonts":
             meta = json.loads((ROOT / "fonts" / "fonts.json").read_text(encoding="utf-8"))
+            # 同源字体组（Noto/思源等字形相同）合并展示：同一组只显示一个代表条目，
+            # 比对引擎仍保留各 font_id 参与匹配，仅白名单列表去重
+            from src.pipeline import group_representative
+            seen: set[str] = set()
+            merged = []
+            for m in meta:
+                rep = group_representative(m["id"])
+                if rep in seen:
+                    continue
+                seen.add(rep)
+                merged.append(m)
             self._json(200, {"fonts": [
                 {"id": m["id"], "name": m["name"], "license": m["license"],
-                 "style": m["style"]} for m in meta]})
-        elif path == "/api/history":
-            entries = []
-            if HISTORY_PATH.exists():
-                lines = HISTORY_PATH.read_text(encoding="utf-8").strip().splitlines()
-                entries = [json.loads(l) for l in lines[-50:]][::-1]
-            self._json(200, {"history": entries})
+                 "style": m["style"]} for m in merged]})
         elif path == "/" or path == "/index.html":
             self._send(200, (WEB_DIR / "index.html").read_bytes(), "text/html; charset=utf-8")
         elif path == "/app.js":
@@ -170,14 +186,40 @@ class Handler(BaseHTTPRequestHandler):
                 if not ocr_available():
                     self._json(501, {"error": "RapidOCR 未安装"})
                     return
-                self._json(200, auto_match(get_matcher(), payload["image_b64"]))
+                t0 = time.time()
+                resp = auto_match(get_matcher(), payload["image_b64"])
+                resp["elapsed"] = round(time.time() - t0, 3)
+                self._json(200, resp)
             except Exception as e:  # noqa: BLE001
                 self._json(500, {"error": str(e)})
         else:
             self._json(404, {"error": "not found"})
 
 
-def main() -> None:
+def start_server(open_browser: bool = True) -> ThreadingHTTPServer | None:
+    """启动 HTTP 服务（单实例保护）。返回 httpd（未 serve_forever，由调用方阻塞）。
+
+    - 端口已被本应用占用（旧实例/上次双击残留）→ 打开浏览器界面后返回 None，
+      避免 GUI 模式下无反馈地堆积进程。
+    - 否则：预热索引 → 后台预热 OCR → 可选自动打开浏览器 → 返回 httpd。
+    """
+    # 单实例保护：端口已被本应用占用（旧实例/上次双击残留）时，
+    # 不再重复起服务，只确保浏览器打开界面后退出自身。
+    # 否则 GUI(console=False) 模式双击毫无反馈，用户会反复双击堆积进程。
+    import socket
+    port_busy = False
+    try:
+        with socket.create_connection((HOST, PORT), timeout=1):
+            port_busy = True
+    except OSError:
+        pass
+
+    if port_busy:
+        print(f"检测到已有 FontCop 实例在 {HOST}:{PORT}，仅打开界面并退出", flush=True)
+        import webbrowser
+        webbrowser.open(f"http://{HOST}:{PORT}")
+        return None
+
     print(f"FontCop 服务启动: http://{HOST}:{PORT}", flush=True)
     get_matcher()  # 预热索引
     print("索引已加载，等待识别请求…", flush=True)
@@ -196,7 +238,25 @@ def main() -> None:
             print(f"OCR 预热失败（自动识别将不可用）: {e}", flush=True)
 
     threading.Thread(target=_warm_ocr, daemon=True).start()
-    ThreadingHTTPServer((HOST, PORT), Handler).serve_forever()
+    httpd = ThreadingHTTPServer((HOST, PORT), Handler)
+
+    if open_browser:
+        # GUI 模式无可见窗口：服务就绪后自动打开默认浏览器（独立线程）
+        import webbrowser
+
+        def _open_browser() -> None:
+            try:
+                webbrowser.open(f"http://{HOST}:{PORT}")
+            except Exception as e:  # noqa: BLE001
+                print(f"打开浏览器失败: {e}", flush=True)
+        threading.Thread(target=_open_browser, daemon=True).start()
+    return httpd
+
+
+def main() -> None:
+    httpd = start_server(open_browser=True)
+    if httpd is not None:
+        httpd.serve_forever()
 
 
 if __name__ == "__main__":

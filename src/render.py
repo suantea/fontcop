@@ -1,4 +1,6 @@
 """字体渲染封装：任意字体渲染单字 → 归一化 128×128 二值图。"""
+from __future__ import annotations
+
 from functools import lru_cache
 from pathlib import Path
 
@@ -65,15 +67,19 @@ def render_char(font_path: str, ch: str) -> np.ndarray | None:
 def glyph_files() -> dict[str, str]:
     """fonts.json → {font_id: 文件路径字符串}。
     支持普通路径与 system:path#member 两种格式。
+    优先使用 fonts/subset/（子集化后的小体积字体，打包用），
+    缺失时回退 fonts/files/（全量字体，开发/校验用）。
     """
     import json
-    meta = json.loads((Path(__file__).resolve().parent.parent / "fonts" / "fonts.json").read_text(encoding="utf-8"))
-    base = Path(__file__).resolve().parent.parent / "fonts" / "files"
+    root = Path(__file__).resolve().parent.parent
+    meta = json.loads((root / "fonts" / "fonts.json").read_text(encoding="utf-8"))
     result = {}
     for m in meta:
         f = m["file"]
         if m.get("is_system"):
             result[m["id"]] = f  # 已含 system: 前缀
-        else:
-            result[m["id"]] = str(base / f)
+            continue
+        sub = root / "fonts" / "subset" / f
+        full = root / "fonts" / "files" / f
+        result[m["id"]] = str(sub if sub.exists() else full)
     return result
