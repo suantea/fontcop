@@ -1,4 +1,6 @@
 """程序化生成测试图：白名单字体渲染单字 → 加噪声/背景/缩放/JPEG压缩，模拟截图。"""
+from __future__ import annotations
+
 import io
 import random
 

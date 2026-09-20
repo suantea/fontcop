@@ -7,6 +7,8 @@
   5. 输出 fonts/system_fonts.json + 更新 fonts/fonts.json
 可重复运行（每次重新扫，增量更新）。
 """
+from __future__ import annotations
+
 import json
 import re
 import subprocess

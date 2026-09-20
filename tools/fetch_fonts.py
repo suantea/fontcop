@@ -2,7 +2,10 @@
 """按 fonts/download_list.txt 批量下载字体到 fonts/files/。
 支持直链文件和 zip（自动解包，取第一个 ttf/otf）。可重复执行（已存在则跳过）。
 """
+from __future__ import annotations
+
 import json
+import os
 import sys
 import urllib.request
 import zipfile
@@ -14,6 +17,15 @@ FILES_DIR = FONTS_DIR / "files"
 LIST_FILE = FONTS_DIR / "download_list.txt"
 
 UA = {"User-Agent": "Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7)"}
+
+# 可选 GitHub 加速镜像前缀：FONT_GH_MIRROR=https://gh-proxy.com/ python tools/fetch_fonts.py
+GH_MIRROR = os.environ.get("FONT_GH_MIRROR", "").rstrip("/")
+
+
+def _mirror(url: str) -> str:
+    if GH_MIRROR and url.startswith("https://github.com/"):
+        return GH_MIRROR + "/" + url
+    return url
 
 
 def download(url: str, dest: Path) -> None:
@@ -65,10 +77,10 @@ def main() -> int:
             ok += 1
             continue
         try:
-            print(f"[get ] {fid} <- {url}")
+            print(f"[get ] {fid} <- {_mirror(url)}")
             if url.endswith(".zip"):
                 tmp = FILES_DIR / f"_tmp_{fid}.zip"
-                download(url, tmp)
+                download(_mirror(url), tmp)
                 out = extract_font_archive(tmp, fid)
                 tmp.unlink()
                 if out is None:
@@ -79,7 +91,7 @@ def main() -> int:
                     out.rename(FILES_DIR / declared[0])
             else:
                 dest = FILES_DIR / declared[0] if declared else FILES_DIR / Path(url).name
-                download(url, dest)
+                download(_mirror(url), dest)
                 print(f"       -> {dest.name}")
             ok += 1
         except Exception as e:  # noqa: BLE001

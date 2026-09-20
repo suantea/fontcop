@@ -31,12 +31,14 @@ _base_datas = [
     ('fonts/fonts.json', 'fonts'),
     ('fonts/system_fonts.json', 'fonts'),
     ('fonts/symbols.json', 'fonts'),
-    ('fonts/files/*.ttf', 'fonts/files'),
-    ('fonts/files/*.otf', 'fonts/files'),
+    # 子集化字体（tools/subset_fonts.py 生成，4MB 级别，替代全量 fonts/files 192MB）
+    ('fonts/subset/*.ttf', 'fonts/subset'),
+    ('fonts/subset/*.otf', 'fonts/subset'),
     ('data/glyph_index.npz', 'data'),
     ('web/index.html', 'web'),
     ('web/app.js', 'web'),
     ('web/style.css', 'web'),
+    ('LICENSE', '.'),
 ]
 _datas = []
 for _src, _dst in _base_datas:
@@ -63,10 +65,19 @@ a = Analysis(
         'rapidocr_onnxruntime.utils',
         'rapidocr_onnxruntime.rapid_ocr_api',
         'fontTools.ttLib',
+        'fontTools.subset',
         'PIL',
         'numpy',
-        'scipy.ndimage',
         'pystray',
+        # pywebview 桌面壳（Windows 走 EdgeChromium + pythonnet/clr_loader）
+        'webview',
+        'webview.platforms.edgechromium',
+        'webview.platforms.winforms',
+        'webview.platforms.win32',
+        'webview.platforms.clr',
+        'webview.util',
+        'clr_loader',
+        'pythonnet',
     ] + _pystray_extras,
     hookspath=[],
     hooksconfig={},
@@ -97,5 +108,5 @@ exe = EXE(
     target_arch=None,
     codesign_identity=None,
     entitlements_file=None,
-    icon=None,
+    icon='assets/FontCop.ico',  # exe/任务栏/窗口图标
 )

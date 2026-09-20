@@ -1,5 +1,5 @@
-# 字体下载清单：id → 直接下载 URL（M0 首批 20 款）
-# 下载到 fonts/files/<file>
+# 字体下载清单：id → 直接下载 URL
+# 下载到 fonts/files/，文件名以 fonts.json 的 file 字段为准
 source-han-sans: https://github.com/adobe-fonts/source-han-sans/raw/release/OTF/SimplifiedChinese/SourceHanSansSC-Regular.otf
 source-han-serif: https://github.com/adobe-fonts/source-han-serif/raw/release/OTF/SimplifiedChinese/SourceHanSerifSC-Regular.otf
 lxgw-wenkai: https://github.com/lxgw/LxgwWenKai/releases/download/v1.510/LXGWWenKai-Regular.ttf
@@ -9,3 +9,12 @@ noto-serif-cjk: https://github.com/googlefonts/noto-cjk/raw/main/Serif/OTF/Simpl
 inter: https://github.com/rsms/inter/releases/download/v4.1/Inter-4.1.zip
 jetbrains-mono: https://github.com/JetBrains/JetBrainsMono/releases/download/v2.304/JetBrainsMono-2.304.zip
 dejavu-sans: https://github.com/dejavu-fonts/dejavu-fonts/releases/download/version_2_37/dejavu-fonts-ttf-2.37.zip
+# ---- 补充常用免费商用字体 ----
+# 阿里巴巴普惠体（阿里/淘宝官方，全球永久免费商用）
+alibaba-puhuiti: https://raw.githubusercontent.com/chinayin/fonts-alibaba-puhuiti-regular/master/Alibaba-PuHuiTi-Regular.ttf
+# 站酷庆科黄油体（免费商用）
+zcool-qingke-huangyou: https://raw.githubusercontent.com/google/fonts/main/ofl/zcoolqingkehuangyou/ZCOOLQingKeHuangYou-Regular.ttf
+# MiSans（小米官方，免费商用）
+misans: https://raw.githubusercontent.com/dsrkafuu/misans/main/raw/Normal/MiSansVF.ttf
+# 思源等宽（SIL-OFL）
+source-han-mono: https://raw.githubusercontent.com/adobe-fonts/source-han-mono/master/Regular/OTC/SourceHanMonoSC-Regular.otf

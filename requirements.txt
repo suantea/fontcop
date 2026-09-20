@@ -1,0 +1,6 @@
+# FontCop 运行依赖（源码运行形态）
+numpy==2.0.2
+pillow==11.3.0
+fonttools==4.60.2
+# OCR 自动识别（可选：未安装时前端退回手动框选模式）
+rapidocr-onnxruntime==1.4.4

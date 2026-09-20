@@ -110,47 +110,43 @@
     "file": "DejaVuSans.ttf"
   },
   {
-    "id": "system-0",
-    "name": "黑體-繁",
-    "en_name": "黑體-繁",
-    "license": "系统内置（macOS 授权）",
-    "commercial_free": false,
-    "style": "system",
-    "source_url": "",
-    "file": "system:/System/Library/Fonts/STHeiti Light.ttc#0",
-    "is_system": true
+    "id": "alibaba-puhuiti",
+    "name": "阿里巴巴普惠体",
+    "en_name": "Alibaba PuHuiTi",
+    "license": "free-commercial",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://www.alibabafonts.com/",
+    "file": "AlibabaPuHuiTi-Regular.ttf"
   },
   {
-    "id": "system-1",
-    "name": "黑體-簡",
-    "en_name": "黑體-簡",
-    "license": "系统内置（macOS 授权）",
-    "commercial_free": false,
-    "style": "system",
-    "source_url": "",
-    "file": "system:/System/Library/Fonts/STHeiti Light.ttc#1",
-    "is_system": true
+    "id": "misans",
+    "name": "MiSans",
+    "en_name": "MiSans",
+    "license": "free-commercial",
+    "commercial_free": true,
+    "style": "sans",
+    "source_url": "https://hyperos.mi.com/font/",
+    "file": "MiSansVF.ttf"
   },
   {
-    "id": "system-2",
-    "name": "宋體-簡",
-    "en_name": "宋體-簡",
-    "license": "系统内置（macOS 授权）",
-    "commercial_free": false,
-    "style": "system",
-    "source_url": "",
-    "file": "system:/System/Library/Fonts/Supplemental/Songti.ttc#0",
-    "is_system": true
+    "id": "zcool-qingke-huangyou",
+    "name": "站酷庆科黄油体",
+    "en_name": "ZCOOL QingKe HuangYou",
+    "license": "free-commercial",
+    "commercial_free": true,
+    "style": "display",
+    "source_url": "https://fonts.google.com/specimen/ZCOOL+QingKe+HuangYou",
+    "file": "ZCOOLQingKeHuangYou-Regular.ttf"
   },
   {
-    "id": "system-3",
-    "name": "宋體-繁",
-    "en_name": "宋體-繁",
-    "license": "系统内置（macOS 授权）",
-    "commercial_free": false,
-    "style": "system",
-    "source_url": "",
-    "file": "system:/System/Library/Fonts/Supplemental/Songti.ttc#2",
-    "is_system": true
+    "id": "source-han-mono",
+    "name": "思源等宽",
+    "en_name": "Source Han Mono SC",
+    "license": "SIL-OFL",
+    "commercial_free": true,
+    "style": "mono",
+    "source_url": "https://github.com/adobe-fonts/source-han-mono",
+    "file": "SourceHanMonoSC-Regular.otf"
   }
 ]
