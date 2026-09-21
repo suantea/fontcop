@@ -84,4 +84,5 @@ jobs:
           name: FontCop-win
           path: |
             desktop/dist/*.exe
+            desktop/dist/*.zip
           if-no-files-found: error

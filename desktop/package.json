@@ -55,8 +55,8 @@
       "gatekeeperAssess": false
     },
     "win": {
-      "target": "nsis",
-      "artifactName": "FontCop-Setup-${version}.${ext}"
+      "target": ["nsis", "zip"],
+      "artifactName": "FontCop-${version}.${ext}"
     },
     "nsis": {
       "oneClick": false,
