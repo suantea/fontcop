@@ -11,9 +11,14 @@ const HOST = "127.0.0.1";
 // 打包态：全部在 extraResources 目录
 const PACKED = !process.argv.includes("--no-pack");
 const RESOURCES = PACKED ? process.resourcesPath : path.resolve(__dirname, "..");
+// Windows 运行时是 python.exe（无 bin/ 目录），mac/linux 是 bin/python3
+const IS_WIN = process.platform === "win32";
+const PY_REL = IS_WIN
+  ? path.join("python-runtime", "python.exe")
+  : path.join("python-runtime", "bin", "python3");
 const PY_RUNTIME = PACKED
-  ? path.join(RESOURCES, "python-runtime", "bin", "python3")
-  : path.join(__dirname, "python-runtime", "bin", "python3");
+  ? path.join(RESOURCES, PY_REL)
+  : path.join(__dirname, PY_REL);
 const PROJECT = RESOURCES; // 含 src/ web/ fonts/ data/
 
 let pyProc = null;

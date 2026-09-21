@@ -6,7 +6,9 @@
   "scripts": {
     "start": "electron . --no-pack",
     "pack-python": "bash ./build-python.sh",
-    "dist": "electron-builder --mac"
+    "dist": "electron-builder",
+    "dist:mac": "electron-builder --mac",
+    "dist:win": "electron-builder --win"
   },
   "build": {
     "appId": "com.fontcop.desktop",
@@ -51,6 +53,14 @@
       "category": "public.app-category.utilities",
       "hardenedRuntime": true,
       "gatekeeperAssess": false
+    },
+    "win": {
+      "target": "nsis",
+      "artifactName": "FontCop-Setup-${version}.${ext}"
+    },
+    "nsis": {
+      "oneClick": false,
+      "allowToChangeInstallationDirectory": true
     }
   },
   "devDependencies": {

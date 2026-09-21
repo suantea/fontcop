@@ -4,6 +4,12 @@
 
 **产品形态：三选一** —— ① Web 页面本地源码运行；② 部署为公网/内网 Web 服务（反代托管）；③ 本地桌面软件（Electron 外壳 + 内嵌 Python 比对后端，`desktop/` 目录，打包为 .app/.exe，比对全在本机、零服务器内存、OCR 保留）。**已放弃 exe / pywebview / 托盘 的独立打包路线，但 Electron 嵌 Python 是受支持的桌面形态。** 残留的 exe 时代产物（FontCop.spec、src/app.py、src/tray.py、start.sh、build-windows.yml、pyinstaller/frozen 分支）已删除；`.venv` 与 `desktop/python-runtime/`、`desktop/node_modules/` 各机器自建，勿提交。
 
+### 桌面版构建（mac .dmg / Windows .exe）
+
+- 本地构建：`bash desktop/build-python.sh`（自动按 OS/ARCH 下载 python-build-standalone，Windows 上跑会得到 `python.exe`）→ `cd desktop && npm install && npm run dist`（`dist:mac`/`dist:win` 分平台）。
+- **CI 双平台构建**：`.github/workflows/desktop.yml`，push 到 main 触发 `desktop/**`、`src/**` 等变更时自动构建 mac .dmg + win .exe（nsis 安装包），也可 workflow_dispatch 手动触发；产物在 Actions run 的 artifacts 里下载（FontCop-mac / FontCop-win）。未配签名证书，`CSC_IDENTITY_AUTO_DISCOVERY=false` 跳过 macOS 签名。
+- Windows 运行时差异：python-build-standalone 的 Windows 资产解压后**无 bin/ 目录**，二进制是 `python-runtime/python.exe`（非 `bin/python3`），`main.js` 已按 `process.platform` 分支处理。
+
 ## 常用命令
 
 ```bash

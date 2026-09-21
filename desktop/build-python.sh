@@ -8,12 +8,24 @@ DESKTOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$DESKTOP_DIR")"
 OUT="$DESKTOP_DIR/python-runtime"
 
-# 平台：这里按 macOS arm64 构建；跨平台需改下面的 PY_VER/PBS_VER/ARCH
-PY_VER="3.14"            # 与项目开发环境一致（python-build-standalone 用 X.Y.Z 全版本号）
+# 平台：自动按当前 OS/ARCH 选 python-build-standalone 资产（也可用 PBS_ARCH 环境变量覆盖）
 PY_FULL="3.14.7"         # 具体补丁版本（release 资产按此命名）
 PBS_VER="20260901"       # python-build-standalone 发布日期标签（releases/tags/<此值>）
-ARCH="aarch64-apple-darwin"
+case "${PBS_ARCH:-$(uname -s)-$(uname -m)}" in
+  Darwin-arm64)  ARCH="aarch64-apple-darwin" ;;
+  Darwin-x86_64) ARCH="x86_64-apple-darwin" ;;
+  Linux-x86_64)  ARCH="x86_64-unknown-linux-gnu" ;;
+  Linux-aarch64) ARCH="aarch64-unknown-linux-gnu" ;;
+  MINGW*-x86_64*|Windows*-x86_64*|MSYS*-x86_64*) ARCH="x86_64-pc-windows-msvc" ;;
+  *) echo "不支持的平台: $(uname -s)-$(uname -m)（可用 PBS_ARCH 覆盖）"; exit 1 ;;
+esac
 URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VER}/cpython-${PY_FULL}+${PBS_VER}-${ARCH}-install_only.tar.gz"
+# Windows 资产解压后无 bin/ 目录，可执行文件在根下
+if [[ "$ARCH" == *windows* ]]; then
+  PY_EXE_REL="python.exe"
+else
+  PY_EXE_REL="bin/python3"
+fi
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
@@ -31,13 +43,13 @@ tar -xzf "$TMP/py.tgz" -C "$TMP"
 cp -R "$TMP/python"/* "$OUT/"
 
 echo "== 创建 venv 并装依赖 =="
-"$OUT/bin/python3" -m venv "$OUT"
-# venv 默认复用 base，重建确保独立
-"$OUT/bin/python3" -m ensurepip
-"$OUT/bin/pip" install -r "$ROOT/requirements.txt"
+PY_EXE="$OUT/$PY_EXE_REL"
+"$PY_EXE" -m venv "$OUT"
+"$PY_EXE" -m ensurepip
+"$PY_EXE" -m pip install -r "$ROOT/requirements.txt"
 
 echo "== 校验关键依赖 =="
-"$OUT/bin/python3" -c "import numpy, PIL, cv2, rapidocr_onnxruntime; print('deps ok')"
+"$PY_EXE" -c "import numpy, PIL, cv2, rapidocr_onnxruntime; print('deps ok')"
 
 echo "== 完成：运行时会写入 $OUT =="
-"$OUT/bin/python3" --version
+"$PY_EXE" --version
