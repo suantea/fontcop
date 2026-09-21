@@ -46,7 +46,8 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
     OCR 对小图/单字/贴边文字检测不稳：依次尝试 [原图放大2x, 原图]，
     取首个有结果的尺度；都失败才走逐段兜底。
     每行：列投影段数与 OCR 文本长度对齐时按文本切字（字符引导）；
-    段数明显多于文本字符（OCR 漏读，如字母间距大）时，改逐段全索引搜索投票。
+    段数与字数不一致（OCR 漏读/误读/粘连，如 4 字读成「美城d」）时，
+    改逐段全索引搜索投票（不依赖 OCR 文本，避免误读字被贴上正确字形）。
     """
     img_bytes = base64.b64decode(image_b64)
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
@@ -92,7 +93,7 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
     per_font: dict[str, dict] = {}
     per_seg: list[dict] = []
     for box, text, score in boxes:
-        if score is None or float(score) < 0.6:
+        if score is None:
             continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]
@@ -100,19 +101,37 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
         crop = arr[max(0, y0):y1, max(0, x0):x1]
         if crop.size == 0:
             continue
+        gray = crop.mean(axis=-1).astype(np.uint8) if crop.ndim == 3 else crop
+        ink = _ink_mask(gray)
+        if ink is None:
+            continue
+        segs = _column_segs(ink)
+        if float(score) < 0.6:
+            # OCR 置信度低（部分检出/误读，常见于宽间距 logo 字）：
+            # 文本不可靠，弃用字符引导，逐段全索引搜索投票（列投影不依赖 OCR 文本）
+            pf, ps = _mask_votes(matcher, ink)
+            _merge_votes(per_font, pf)
+            per_seg.extend(ps)
+            continue
         chars = _usable_chars(text[:max_chars_per_line])
         if not chars:
             continue
-        gray = crop.mean(axis=-1).astype(np.uint8) if crop.ndim == 3 else crop
-        ink = _ink_mask(gray)
-        segs = _column_segs(ink) if ink is not None else []
-        if len(segs) >= 2 and len(segs) > len(chars) + 1:
-            # OCR 漏读（如字母间距大）：文本长度不够，逐段全索引搜索投票
+        if len(segs) != len(chars):
+            # 段数与 OCR 字数对不齐（漏读/误读/粘连/过切，如 4 字读成「美城d」）：
+            # 字符引导对齐不可信，逐段全索引搜索投票（不依赖 OCR 文本）
             pf, ps = _mask_votes(matcher, ink)
             _merge_votes(per_font, pf)
             per_seg.extend(ps)
         else:
-            marks.extend(_split_chars(crop, text[:max_chars_per_line]))
+            line_marks = _split_chars(crop, text[:max_chars_per_line])
+            # 字符引导切字后逐字全索引校验：任一标签与真实字形不符（OCR 误读，
+            # 如「创城」读成「城d」）→ 整行改走逐段搜索，避免误读标签带偏投票
+            if line_marks and _labels_consistent(matcher, line_marks):
+                marks.extend(line_marks)
+            elif ink is not None:
+                pf, ps = _mask_votes(matcher, ink)
+                _merge_votes(per_font, pf)
+                per_seg.extend(ps)
 
     if per_font:
         # 可用的字符引导票也并入（补足逐段搜索可能漏掉的段）
@@ -189,8 +208,10 @@ def _vsearch(matcher: Matcher, b: np.ndarray) -> list[tuple[str, str, float]]:
     from src.features import hog, hog_similarity, ncc_aligned, sdf
 
     b64 = _downsample64(b)
-    inter = np.logical_and(b64[None, None], matcher.glyphs).sum(axis=(-2, -1))
-    union = np.logical_or(b64[None, None], matcher.glyphs).sum(axis=(-2, -1))
+    # 粗排：复用 Matcher 预打包位图（_fonts_bin）的 popcount 加速 IoU
+    b64p = np.packbits(b64.ravel())
+    inter = np.bitwise_and(b64p[None, None], matcher._fonts_bin).astype(np.uint16).sum(axis=-1)
+    union = np.bitwise_or(b64p[None, None], matcher._fonts_bin).astype(np.uint16).sum(axis=-1)
     iou = np.where(union > 0, inter / np.maximum(union, 1), 0.0)
 
     qi, qh = sdf(b), hog(b)
@@ -216,8 +237,11 @@ def _ink_mask(gray: np.ndarray) -> np.ndarray | None:
     return ink if ink.any() else None
 
 
-def _column_segs(ink: np.ndarray) -> list[tuple[int, int]]:
-    """按列投影切段（连续 ink 列、最小 5 列、剔除过窄段）。"""
+def _column_segs(ink: np.ndarray, filter_narrow: bool = True) -> list[tuple[int, int]]:
+    """按列投影切段（连续 ink 列、最小 5 列）。
+    filter_narrow=True（默认）：剔除过窄段（< 中位宽×0.35），用于字符引导切字。
+    filter_narrow=False：保留全部段，供 _mask_votes 先合并左右结构字碎片再搜索
+    （「创」的「刂」等窄部件若在此被剔除，剩半字会匹配成垃圾字）。"""
     col_ink = ink.sum(axis=0)
     segs, start = [], None
     for i, v in enumerate(col_ink > 0):
@@ -229,8 +253,8 @@ def _column_segs(ink: np.ndarray) -> list[tuple[int, int]]:
             start = None
     if start is not None:
         segs.append((start, len(col_ink)))
-    if not segs:
-        return []
+    if not segs or not filter_narrow:
+        return segs
     widths = [b - a for a, b in segs]
     med_w = sorted(widths)[len(widths) // 2]
     return [(a, b) for (a, b), w in zip(segs, widths) if w > med_w * 0.35]
@@ -238,23 +262,59 @@ def _column_segs(ink: np.ndarray) -> list[tuple[int, int]]:
 
 def _sub_wide(ink: np.ndarray, x0: int, x1: int) -> list[tuple[int, int]]:
     """单个列段过宽（多字母粘连成整块）时按等宽细分，返回子段坐标列表。
-    宽高比超过约 1.35 视为粘连（拉丁字母宽高比一般 ≈0.6-0.9）。"""
+    宽高比超过约 1.35 视为粘连（CJK 单字 ≈0.7-1.0、拉丁单字 ≈0.4-1.2 均不受影响）。"""
     rows = np.where(ink[:, x0:x1].any(axis=1))[0]
     if not len(rows):
-        return []
+        return [(x0, x1)]
     h = rows.max() - rows.min() + 1
     w = x1 - x0
-    n = max(1, int(np.ceil(w / max(h * 0.6, 1))))
+    n = max(1, int(np.ceil(w / max(h * 1.35, 1))))
     if n <= 1:
         return [(x0, x1)]
     return [(x0 + w * i // n, x0 + w * (i + 1) // n) for i in range(n)]
 
 
+def _merge_narrow(ink: np.ndarray, segs: list[tuple[int, int]]) -> list[tuple[int, int]]:
+    """合并过窄列段：宽高比 < 0.5 的段视为左右结构字部件碎片（如「创」的「刂」），
+    并入相邻段。完整汉字/字母宽高比 ≥0.5（如「创」0.62），不得误并。"""
+    if len(segs) < 2:
+        return segs
+    merged = list(segs)
+    i = 0
+    while i < len(merged) and len(merged) > 1:
+        a, b = merged[i]
+        rows = np.where(ink[:, a:b].any(axis=1))[0]
+        if not len(rows):
+            i += 1
+            continue
+        h = rows.max() - rows.min() + 1
+        if (b - a) / h >= 0.5:
+            i += 1
+            continue
+        # 碎片：并入间隙更小的一侧
+        left = merged[i - 1] if i > 0 else None
+        right = merged[i + 1] if i < len(merged) - 1 else None
+        gap_l = (a - left[1]) if left else float("inf")
+        gap_r = (right[0] - b) if right else float("inf")
+        if right is not None and gap_r <= gap_l:
+            merged[i] = (a, right[1])
+            merged.pop(i + 1)
+        elif left is not None:
+            merged[i - 1] = (left[0], b)
+            merged.pop(i)
+        else:
+            i += 1
+    return merged
+
+
 def _mask_votes(matcher: Matcher, ink: np.ndarray) -> tuple[dict[str, dict], list[dict]]:
-    """掩膜逐段全索引搜索 → (per_font 投票表, per_seg 逐段结果列表)。"""
+    """掩膜逐段全索引搜索 → (per_font 投票表, per_seg 逐段结果列表)。
+    先合并过窄段：左右结构汉字（绿/创/城…）部件间竖隙会被列投影切成碎片，
+    碎片（如「刂」立刀旁）全索引匹配成垃圾字（如 'd'），合并后按整字搜索。"""
+    segs = _merge_narrow(ink, _column_segs(ink, filter_narrow=False))
     per_font: dict[str, dict] = {}
     per_seg: list[dict] = []
-    for x0, x1 in _column_segs(ink):
+    for x0, x1 in segs:
         for a, b in _sub_wide(ink, x0, x1):
             seg = _seg_img(ink, a, b)
             if seg is None:
@@ -361,6 +421,20 @@ def _usable_chars(text: str) -> list[str]:
     """只保留可做字形比对的字符：字母/数字/汉字。
     OCR 常把 logo 里的字形误读成标点（如 ' ，：】【），这些参与比对只会产生垃圾票。"""
     return [c for c in text if c.isalnum() or "\u4e00" <= c <= "\u9fff"]
+
+
+def _labels_consistent(matcher: Matcher, marks: list[dict]) -> bool:
+    """逐字全索引校验 OCR 标签：每个切出字形的最像索引字应与标签一致且达标，
+    否则认为 OCR 误读（如「创城」读成「城d」），标签不可信。"""
+    for mk in marks:
+        ink = _ink_mask(mk["image"])
+        if ink is None:
+            return False
+        seg = _seg_img(ink, 0, ink.shape[1])
+        top = _vsearch(matcher, seg)
+        if not top or top[0][1] != mk["char"] or top[0][2] < _MIN_AUTO:
+            return False
+    return True
 
 
 def _split_chars(line_img: np.ndarray, text: str) -> list[dict]:

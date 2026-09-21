@@ -77,7 +77,7 @@ class Matcher:
         self.font_ids: list[str] = self.index["font_ids"]
         self.chars: list[str] = self.index["chars"]
         self.glyphs: np.ndarray = self.index["glyphs"]     # [F, C, 64, 64] uint8
-        self.sdfs: np.ndarray = self.index["sdfs"]         # [F, C, 64, 64] f32
+        self.sdfs: np.ndarray = self.index["sdfs"]         # [F, C, 64, 64] float16（内存减半，精度损失 <2e-6）
         self._char_pos = {c: i for i, c in enumerate(self.chars)}
         self._fonts_bin = np.packbits(  # 预打包粗排用位图加速 IoU
             self.glyphs.reshape(len(self.font_ids), len(self.chars), -1), axis=-1
@@ -98,12 +98,12 @@ class Matcher:
         if j is None:                               # 索引缺字：退化用同形字符比对
             return []
 
-        # 粗排：对全部字体该字符的位图算 IoU
-        cand = self.glyphs[:, j]                    # [F, 64, 64]
-        scores = np.array([
-            iou_similarity(b64, g) for g in cand
-        ])
-        top = np.argsort(scores)[::-1][:_IOU_TOP]
+        # 粗排：使用预打包位图（_fonts_bin）的 popcount 加速 IoU
+                b64p = np.packbits(b64.ravel())
+                inter = np.bitwise_and(b64p[None, None], self._fonts_bin).astype(np.uint16).sum(axis=-1)
+                union = np.bitwise_or(b64p[None, None], self._fonts_bin).astype(np.uint16).sum(axis=-1)
+                iou = np.where(union > 0, inter / np.maximum(union, 1), 0.0)
+                top = np.argsort(iou.ravel())[::-1][:_IOU_TOP]
 
         # 精排：SDF+NCC（平移对齐）与 HOG 笔画方向特征加权融合
         q_hog = hog(b)

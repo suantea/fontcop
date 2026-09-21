@@ -49,6 +49,7 @@
 - **`.venv` 是机器相关产物**：跨机器/跨平台必须重建（macOS/Linux：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`；Windows 路径不同）。requirements 用宽松下界（>=），已在 Python 3.9/3.14 跑通。
 - **opencv 必须 <5**：opencv-python 5.0 起新版 NEON resize 核（kleidicv）在 macOS/arm64 的个别输入尺寸上必现 SIGSEGV（如 3080×2117），会把整个服务进程打死，前端表现为「自动识别失败：Load failed」。requirements 已锁 `opencv-python>=4.11.0.86,<5`；重建环境/升级依赖时勿装 5.x。另外 `web/app.js` 与 `src/auto.py` 都会在 OCR 前把图缩到合适边长（≤1600/2200），降低超大图对 OCR 的检出与内存压力。
 - **OCR 建议独立子进程隔离**：RapidOCR 在异常输入（超大图、依赖版本不合）下可能 SIGSEGV/永久挂起。目前 ocr 与 HTTP 服务在同一进程内运行，一次 OCR 崩溃就会打死整个服务（前端表现为「自动识别失败：Load failed / 卡自动识别中」）。已知可穷举到的崩点已靠 opencv 锁 <5 堵住，但无法枚举所有输入；若再次出现 OCR 引发整服务死亡，应把 RapidOCR 挪进独立子进程（子进程内初始化、可超时/重启隔离），不要继续在同一进程里堆锁。前端已做 60s 超时与按钮恢复兜底，但根治靠隔离，勿回退为依赖前端容错。
+- **自动模式不依赖 OCR 文本的兜底**：OCR 行置信度 <0.6，或列投影段数与 OCR 字数对不齐（`len(segs) != len(chars)`，宽间距 logo 字常部分检出/误读，如 4 字读成「美城d」）时，OCR 文本不可靠，弃字符引导改走列投影逐段全索引搜索（不依赖 OCR 文本，避免误读字贴到正确字形上）；勿改回整行跳过或 `> chars+1` 的旧条件。段数与字数碰巧对齐但标签误读（`_labels_consistent` 逐字全索引校验任一不符）同样整行回退逐段搜索。**左右结构汉字（绿/创/城…）部件间竖隙会被列投影切碎**（如「创」→仓+刂），`_mask_votes` 必须用 `_column_segs(ink, filter_narrow=False)` 保留窄段再经 `_merge_narrow`（宽高比 <0.5 视为碎片）合并后搜索——勿改回 `filter_narrow=True`（会把「刂」当噪声剔除，剩半字匹配成垃圾字如 'd'），也不要改成按相对宽度过滤（会把正常窄字如「创」0.62 误并）。`_sub_wide` 粘连细分阈值为宽高比 1.35。索引外字符（如「绿/航」不在 794 字集内）逐段搜索会落到形近索引字或低于 `_MIN_AUTO` 被过滤，仅影响逐字标签、不影响字体判定。回归见 `tests/test_auto_wide.py`。
 - **`.bak` 文件是历史快照**，不要读取或基于其改动；根目录日志/临时文件（`*.log`、`nul`、`_tmp_*`、`_probe*`）均已 gitignore。
 
 ## 维护规则
