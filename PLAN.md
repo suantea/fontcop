@@ -1,5 +1,7 @@
 # 字体版权快查工具（FontCop）开发说明与计划 v2
 
+> **【历史文档】**本文件是 v1/v2 的原始开发计划。其中「pywebview 桌面壳 / 托盘 tray / PyInstaller 打包（M4 项）」已随产品形态调整为 **Web 页面（本地源码运行 + 可部署 Web 服务）** 而废弃：相关文件（FontCop.spec、src/app.py、src/tray.py、build-windows.yml）已删除，scipy 依赖已移除（src/edt.py 纯 numpy）。最新命令与架构以 AGENTS.md / README.md 为准。
+
 > 本版基于对成熟方案（mixfont/lens、YuzuMarker.FontDetection、Fontke 识字体、WhatTheFont）与字形比对算法（SDF、RaySpace、Hausdorff、SSIM）的调研，将 v1 计划细化为可执行任务。
 
 ## 1. 项目目标

@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import threading
 from pathlib import Path
 
 import base64
@@ -17,6 +18,7 @@ from src.pipeline import Matcher, _group_of
 from src.features import verdict_of
 
 _ocr = None
+_OCR_LOCK = threading.Lock()   # onnxruntime session 非线程安全：识别串行化，比对仍可并行
 
 
 def ocr_available() -> bool:
@@ -30,8 +32,10 @@ def ocr_available() -> bool:
 def get_ocr():
     global _ocr
     if _ocr is None:
-        from rapidocr_onnxruntime import RapidOCR
-        _ocr = RapidOCR()
+        with _OCR_LOCK:
+            if _ocr is None:  # 双重检查：防止并发下重复初始化（初始化耗时数十秒）
+                from rapidocr_onnxruntime import RapidOCR
+                _ocr = RapidOCR()
     return _ocr
 
 
@@ -61,7 +65,8 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
         padded = Image.new("RGB", (base.width + pad * 2, base.height + pad * 2), (255, 255, 255))
         padded.paste(base, (pad, pad))
         arr = np.asarray(padded)
-        result, _ = ocr(arr)
+        with _OCR_LOCK:
+            result, _ = ocr(arr)
         if result:
             break
 

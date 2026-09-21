@@ -1,0 +1,15 @@
+# 统一 LF 行尾，防止跨平台/编辑器把整仓转成 CRLF
+* text=auto eol=lf
+
+# Windows 启动脚本保留 CRLF（batch/vbs 在部分环境下 LF 可能异常）
+*.bat text eol=crlf
+*.vbs text eol=crlf
+
+# 二进制（字体/索引/图片）不参与行尾转换
+*.ttf binary
+*.otf binary
+*.ttc binary
+*.npz binary
+*.png binary
+*.ico binary
+*.wav binary

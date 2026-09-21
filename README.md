@@ -33,10 +33,39 @@
 ### 怎么跑
 
 ```bash
-python src/server.py          # 或 run.py；默认 http://127.0.0.1:8642
+# 首次：建虚拟环境 + 装依赖（requirements 为宽松下界，Py3.9+ 均可）
+python3 -m venv .venv
+.venv/bin/pip install -r requirements.txt
+
+# 重新建字形索引（首次必做；改字体白名单/阈值后也要重跑）
+.venv/bin/python -m src.indexer
+
+# 启动：本机模式（自动开浏览器）
+.venv/bin/python -m src.server        # 或 python run.py；默认 http://127.0.0.1:8642
 ```
 
-首次会自动建字体索引（白名单字形库），OCR 用内置 RapidOCR（ONNX，无需联网）。
+首次会自动建字体索引（白名单字形库），OCR 用内置 RapidOCR（ONNX，无需联网；未安装或 `FONTOP_NO_OCR=1` 时前端自动退回手动框选）。
+
+### 部署（公网/内网 Web 服务）
+
+服务已是标准 HTTP 服务 + 纯静态前端，可直接交给反代托管。全部配置经环境变量（本机模式不设亦可）：
+
+| 变量 | 默认 | 说明 |
+|------|------|------|
+| `FONTOP_HOST` | `127.0.0.1` | 绑定地址；部署设 `0.0.0.0` 或由反代转发。非回环时自动跳过「单实例保护/自动开浏览器」 |
+| `FONTOP_PORT` | `8642` | 监听端口 |
+| `FONTOP_MAX_BODY` | `16777216` | 请求体上限（字节），防大图打爆内存 |
+| `FONTOP_TOKEN` | 空 | 设值后所有页面/API 需 `Authorization: Bearer <token>`（或 `X-FontCop-Token`）；`/healthz` 除外 |
+| `FONTOP_CORS_ORIGIN` | 空 | 需要跨域访问时设为来源（如 `https://site.example`），并允许 OPTIONS 预检 |
+| `FONTOP_NO_OCR` | 空 | `1` 关闭自动识别（退回手动框选），省 OCR 模型体积与并发成本 |
+
+```bash
+FONTOP_HOST=0.0.0.0 FONTOP_TOKEN=your-token .venv/bin/python -m src.server
+```
+
+- 健康检查：`GET /healthz` → `{"status":"ok","version":...}`（systemd/容器的探针直接用它）。
+- 建议在反代层加 HTTPS 与限流（caddy/nginx），见 `docs/DEPLOY.md`。
+- 隐私提示：截图内容会上传到服务端比对，公网使用请在页面显著位置声明「不构成法律意见、图片不留存」（当前实现不存原图，仅落 `data/history.jsonl` 元数据）。
 
 ### 怎么用
 
@@ -58,13 +87,13 @@ python src/server.py          # 或 run.py；默认 http://127.0.0.1:8642
 ```
 fontcop/
 ├─ src/
-│  ├─ server.py      HTTP 服务：静态托管 + API（/api/match /api/auto /api/fonts）
+│  ├─ server.py      HTTP 服务：静态托管 + API（/api/match /api/auto /api/fonts /healthz）
 │  ├─ auto.py        /api/auto：OCR 自动提取字符 → 聚合投票 → 四态判定（空兜底 unknown）
 │  ├─ features.py    字形级比对核心：二值 / IoU / 有向距离场 / NCC / HOG 相似度 + 阈值常量
 │  ├─ pipeline.py    编码→字形比对→聚合 的管线抽层（OCR 与手动共用）
 │  ├─ indexer.py     白名单字体 → 字形索引
 │  ├─ render.py      字形 → 可渲染样本位图
-│  └─ tray.py        系统托盘（可选）
+│  └─ edt.py         纯 NumPy 欧氏距离变换（替代 scipy）
 ├─ web/
 │  ├─ index.html     页面骨架（图片区 + 结果区 + 弹层）
 │  ├─ app.js         前端逻辑：拖拽/粘贴/框选/自动识别/结果渲染（含逐字堆叠图 + 名映射守卫）

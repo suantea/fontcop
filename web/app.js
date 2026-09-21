@@ -91,7 +91,7 @@
     }
   });
 
-  // 页面聚焦时自动读取剪贴板截图（配合托盘"截图识别"流程；不覆盖正在编辑的图）
+  // 页面聚焦时自动读取剪贴板截图（不覆盖正在编辑的图）
   async function tryClipboardImage() {
     try {
       const items = await navigator.clipboard.read();

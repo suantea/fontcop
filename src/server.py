@@ -1,12 +1,15 @@
-"""FontCop 本地服务：托管 web/ 静态页 + 识别 API。
+"""FontCop 服务：托管 web/ 静态页 + 识别 API。
 
 启动：python -m src.server   （默认 http://127.0.0.1:8642）
+本机模式自动开浏览器；部署模式（HOST 非回环）关浏览器、可配 token/CORS。
 """
 from __future__ import annotations
 
 import base64
+import hmac
 import io
 import json
+import os
 import time
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -14,32 +17,27 @@ from pathlib import Path
 import numpy as np
 from PIL import Image
 
-import sys
-
 from src.pipeline import Matcher
 
-
-def _resolve_dirs() -> tuple[Path, Path]:
-    """返回 (资源根目录, 数据目录)。
-    - 开发模式：都在项目根
-    - 打包模式：资源在 _MEIPASS（只读临时目录），
-      数据放可执行文件旁的 FontCop_data/（持久，跨重启保留历史）
-    """
-    if getattr(sys, "frozen", False):
-        res = Path(getattr(sys, "_MEIPASS"))
-        exe_dir = Path(sys.executable).resolve().parent
-        data = exe_dir / "FontCop_data"
-    else:
-        res = Path(__file__).resolve().parent.parent
-        data = res / "data"
-    return res, data
-
-
-ROOT, DATA_DIR = _resolve_dirs()
+VERSION = "1.1.0"
+ROOT = Path(__file__).resolve().parent.parent
+DATA_DIR = ROOT / "data"
 WEB_DIR = ROOT / "web"
 HISTORY_PATH = DATA_DIR / "history.jsonl"
 
-HOST, PORT = "127.0.0.1", 8642
+
+# ---------- 运行配置（环境变量可覆盖，便于部署/反代） ----------
+def _env(key: str, default: str) -> str:
+    return os.environ.get(key, default)
+
+
+HOST = _env("FONTOP_HOST", "127.0.0.1")                            # 部署时设 0.0.0.0 或交给反代
+PORT = int(_env("FONTOP_PORT", "8642"))
+MAX_BODY = int(_env("FONTOP_MAX_BODY", str(16 * 1024 * 1024)))     # 请求体上限，防大图打爆内存
+TOKEN = _env("FONTOP_TOKEN", "") or None                           # 设值后所有页面/API 需 Bearer token
+CORS_ORIGIN = _env("FONTOP_CORS_ORIGIN", "") or None               # 需跨域访问时设来源域名
+
+_IS_LOCAL = HOST in ("127.0.0.1", "localhost", "::1")
 
 _matcher: Matcher | None = None
 
@@ -130,11 +128,33 @@ class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 安静模式
         pass
 
+    def _authorized(self) -> bool:
+        """配置了 FONTOP_TOKEN 时校验 Bearer 头（常数时间比较）。"""
+        if not TOKEN:
+            return True
+        auth = self.headers.get("Authorization", "")
+        if auth.startswith("Bearer "):
+            return hmac.compare_digest(auth[7:], TOKEN)
+        return hmac.compare_digest(self.headers.get("X-FontCop-Token", ""), TOKEN)
+
+    def _read_json(self) -> dict:
+        """读取并解析 JSON 请求体，限制大小防止大 base64 图打爆内存。"""
+        length = self.headers.get("Content-Length")
+        if length is None:
+            raise ValueError("missing Content-Length")
+        n = int(length)
+        if n <= 0 or n > MAX_BODY:
+            raise ValueError(f"body too large: {n} > {MAX_BODY}")
+        body = self.rfile.read(n)
+        return json.loads(body)
+
     def _send(self, code: int, body: bytes, ctype: str) -> None:
         self.send_response(code)
         self.send_header("Content-Type", ctype)
         self.send_header("Content-Length", str(len(body)))
         self.send_header("Cache-Control", "no-store")  # 防止旧版前端资源被缓存
+        if CORS_ORIGIN:
+            self.send_header("Access-Control-Allow-Origin", CORS_ORIGIN)
         self.end_headers()
         self.wfile.write(body)
 
@@ -142,9 +162,24 @@ class Handler(BaseHTTPRequestHandler):
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8")
 
+    def do_OPTIONS(self):  # noqa: N802  # CORS 预检
+        self.send_response(204)
+        if CORS_ORIGIN:
+            self.send_header("Access-Control-Allow-Origin", CORS_ORIGIN)
+            self.send_header("Access-Control-Allow-Methods", "GET, POST, OPTIONS")
+            self.send_header("Access-Control-Allow-Headers", "Content-Type, Authorization")
+            self.send_header("Access-Control-Max-Age", "86400")
+            self.send_header("Content-Length", "0")
+        self.end_headers()
+
     def do_GET(self):  # noqa: N802
+        if not self._authorized():
+            self._json(401, {"error": "unauthorized"})
+            return
         path = self.path.split("?", 1)[0]
-        if path == "/api/fonts":
+        if path == "/healthz":
+            self._json(200, {"status": "ok", "version": VERSION})
+        elif path == "/api/fonts":
             meta = json.loads((ROOT / "fonts" / "fonts.json").read_text(encoding="utf-8"))
             # 同源字体组（Noto/思源等字形相同）合并展示：同一组只显示一个代表条目，
             # 比对引擎仍保留各 font_id 参与匹配，仅白名单列表去重
@@ -170,26 +205,33 @@ class Handler(BaseHTTPRequestHandler):
             self._json(404, {"error": "not found"})
 
     def do_POST(self):  # noqa: N802
+        if not self._authorized():
+            self._json(401, {"error": "unauthorized"})
+            return
         path = self.path.split("?", 1)[0]
         if path == "/api/match":
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                payload = json.loads(self.rfile.read(length))
-                self._json(200, handle_match(payload))
+                self._json(200, handle_match(self._read_json()))
+            except (ValueError, json.JSONDecodeError) as e:
+                self._json(400, {"error": f"bad request: {e}"})
             except Exception as e:  # noqa: BLE001
                 self._json(500, {"error": str(e)})
         elif path == "/api/auto":
             try:
-                length = int(self.headers.get("Content-Length", 0))
-                payload = json.loads(self.rfile.read(length))
+                if os.environ.get("FONTOP_NO_OCR"):
+                    self._json(501, {"error": "OCR 已禁用（FONTOP_NO_OCR=1），请使用手动框选"})
+                    return
                 from src.auto import auto_match, ocr_available
                 if not ocr_available():
                     self._json(501, {"error": "RapidOCR 未安装"})
                     return
+                payload = self._read_json()
                 t0 = time.time()
                 resp = auto_match(get_matcher(), payload["image_b64"])
                 resp["elapsed"] = round(time.time() - t0, 3)
                 self._json(200, resp)
+            except (ValueError, json.JSONDecodeError) as e:
+                self._json(400, {"error": f"bad request: {e}"})
             except Exception as e:  # noqa: BLE001
                 self._json(500, {"error": str(e)})
         else:
@@ -197,37 +239,40 @@ class Handler(BaseHTTPRequestHandler):
 
 
 def start_server(open_browser: bool = True) -> ThreadingHTTPServer | None:
-    """启动 HTTP 服务（单实例保护）。返回 httpd（未 serve_forever，由调用方阻塞）。
+    """启动 HTTP 服务（本机模式带单实例保护）。返回 httpd（未 serve_forever，由调用方阻塞）。
 
-    - 端口已被本应用占用（旧实例/上次双击残留）→ 打开浏览器界面后返回 None，
-      避免 GUI 模式下无反馈地堆积进程。
-    - 否则：预热索引 → 后台预热 OCR → 可选自动打开浏览器 → 返回 httpd。
+    - 本机模式（HOST 绑定回环）：
+      * 端口已被本应用占用（旧实例/上次双击残留）→ 打开浏览器界面后返回 None
+      * 正常启动 → 预热索引 → 后台预热 OCR → 可选自动打开浏览器
+    - 部署模式（HOST 非回环）: 跳过单实例/自动开浏览器，方便反代与进程管理托管。
     """
-    # 单实例保护：端口已被本应用占用（旧实例/上次双击残留）时，
-    # 不再重复起服务，只确保浏览器打开界面后退出自身。
-    # 否则 GUI(console=False) 模式双击毫无反馈，用户会反复双击堆积进程。
-    import socket
-    port_busy = False
-    try:
-        with socket.create_connection((HOST, PORT), timeout=1):
-            port_busy = True
-    except OSError:
-        pass
+    # 单实例保护（仅本机模式）：端口已被占用时不再重复起服务，
+    # 只确保浏览器打开界面后退出自身，避免 GUI 双击堆积进程。
+    if _IS_LOCAL:
+        import socket
+        port_busy = False
+        try:
+            with socket.create_connection((HOST, PORT), timeout=1):
+                port_busy = True
+        except OSError:
+            pass
 
-    if port_busy:
-        print(f"检测到已有 FontCop 实例在 {HOST}:{PORT}，仅打开界面并退出", flush=True)
-        import webbrowser
-        webbrowser.open(f"http://{HOST}:{PORT}")
-        return None
+        if port_busy:
+            print(f"检测到已有 FontCop 实例在 {HOST}:{PORT}，仅打开界面并退出", flush=True)
+            import webbrowser
+            webbrowser.open(f"http://{HOST}:{PORT}")
+            return None
 
     print(f"FontCop 服务启动: http://{HOST}:{PORT}", flush=True)
     get_matcher()  # 预热索引
     print("索引已加载，等待识别请求…", flush=True)
     # 先起 HTTP 服务再后台预热 OCR：
-    # 打包版 OCR 模型解压+初始化可达数十秒，若阻塞在此，端口迟迟不监听，用户会以为服务挂了
+    # OCR 模型解压+初始化可达数十秒，若阻塞在此，端口迟迟不监听，用户会以为服务挂了
     import threading
 
     def _warm_ocr() -> None:
+        if os.environ.get("FONTOP_NO_OCR"):
+            return
         try:
             from src.auto import ocr_available, get_ocr
             if ocr_available():
@@ -240,8 +285,8 @@ def start_server(open_browser: bool = True) -> ThreadingHTTPServer | None:
     threading.Thread(target=_warm_ocr, daemon=True).start()
     httpd = ThreadingHTTPServer((HOST, PORT), Handler)
 
-    if open_browser:
-        # GUI 模式无可见窗口：服务就绪后自动打开默认浏览器（独立线程）
+    if open_browser and _IS_LOCAL:
+        # 桌面/本机模式无可见窗口：服务就绪后自动打开默认浏览器（独立线程）
         import webbrowser
 
         def _open_browser() -> None:
