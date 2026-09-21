@@ -98,12 +98,14 @@ class Matcher:
         if j is None:                               # 索引缺字：退化用同形字符比对
             return []
 
-        # 粗排：使用预打包位图（_fonts_bin）的 popcount 加速 IoU
-                b64p = np.packbits(b64.ravel())
-                inter = np.bitwise_and(b64p[None, None], self._fonts_bin).astype(np.uint16).sum(axis=-1)
-                union = np.bitwise_or(b64p[None, None], self._fonts_bin).astype(np.uint16).sum(axis=-1)
-                iou = np.where(union > 0, inter / np.maximum(union, 1), 0.0)
-                top = np.argsort(iou.ravel())[::-1][:_IOU_TOP]
+        # 粗排：在字符 j 对应的所有字体位图（_fonts_bin[:, j]）上用 packbits 加速 IoU，
+        # 仅在字体维度排序（与旧逻辑一致），勿在 [F,C] 全网格排序（会让同一字体重复入榜）。
+        b64p = np.packbits(b64.ravel())              # [512]
+        col = self._fonts_bin[:, j]                  # [F, 512]
+        inter = np.bitwise_and(b64p[None, :], col).astype(np.uint16).sum(axis=-1)
+        union = np.bitwise_or(b64p[None, :], col).astype(np.uint16).sum(axis=-1)
+        iou = np.where(union > 0, inter / np.maximum(union, 1), 0.0)
+        top = np.argsort(iou)[::-1][:_IOU_TOP]
 
         # 精排：SDF+NCC（平移对齐）与 HOG 笔画方向特征加权融合
         q_hog = hog(b)
