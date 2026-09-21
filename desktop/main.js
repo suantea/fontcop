@@ -7,12 +7,13 @@ const http = require("http");
 const PORT = process.env.FONTOP_PORT || "8642";
 const HOST = "127.0.0.1";
 
-// 开发态（--no-pack）：用项目根目录；打包态：用 extraResources 目录
+// 开发态（--no-pack）：后端 cwd 用项目根（src/web/fonts/data），运行时在 desktop/ 下；
+// 打包态：全部在 extraResources 目录
 const PACKED = !process.argv.includes("--no-pack");
-const RESOURCES = PACKED
-  ? path.join(process.resourcesPath)
-  : path.resolve(__dirname, "..");
-const PY_RUNTIME = path.join(RESOURCES, "python-runtime", "bin", "python3");
+const RESOURCES = PACKED ? process.resourcesPath : path.resolve(__dirname, "..");
+const PY_RUNTIME = PACKED
+  ? path.join(RESOURCES, "python-runtime", "bin", "python3")
+  : path.join(__dirname, "python-runtime", "bin", "python3");
 const PROJECT = RESOURCES; // 含 src/ web/ fonts/ data/
 
 let pyProc = null;
