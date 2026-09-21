@@ -1,0 +1,60 @@
+{
+  "name": "fontcop-desktop",
+  "version": "1.1.0",
+  "description": "FontCop 本地桌面版：Electron 外壳 + 内嵌 Python 比对后端",
+  "main": "main.js",
+  "scripts": {
+    "start": "electron . --no-pack",
+    "pack-python": "bash ./build-python.sh",
+    "dist": "electron-builder --mac"
+  },
+  "build": {
+    "appId": "com.fontcop.desktop",
+    "productName": "FontCop",
+    "directories": {
+      "output": "dist",
+      "buildResources": "build"
+    },
+    "files": [
+      "main.js",
+      "preload.js",
+      "build/**/*"
+    ],
+    "extraResources": [
+      {
+        "from": "python-runtime",
+        "to": "python-runtime"
+      },
+      {
+        "from": "../web",
+        "to": "web"
+      },
+      {
+        "from": "../fonts",
+        "to": "fonts"
+      },
+      {
+        "from": "../data",
+        "to": "data"
+      },
+      {
+        "from": "../src",
+        "to": "src"
+      },
+      {
+        "from": "../tools",
+        "to": "tools"
+      }
+    ],
+    "mac": {
+      "target": "dmg",
+      "category": "public.app-category.utilities",
+      "hardenedRuntime": true,
+      "gatekeeperAssess": false
+    }
+  },
+  "devDependencies": {
+    "electron": "^28.0.0",
+    "electron-builder": "^24.0.0"
+  }
+}

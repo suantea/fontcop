@@ -68,6 +68,31 @@ FONTOP_HOST=0.0.0.0 FONTOP_TOKEN=your-token .venv/bin/python -m src.server
 - 建议在反代层加 HTTPS 与限流（caddy/nginx），见 `docs/DEPLOY.md`。
 - 隐私提示：截图内容会上传到服务端比对，公网使用请在页面显著位置声明「不构成法律意见、图片不留存」（当前实现不存原图，仅落 `data/history.jsonl` 元数据）。
 
+### 本地桌面软件（Electron 外壳 + 内嵌 Python 后端）
+
+适合「服务器弱/访问慢、主要自己用」的场景：比对全在本机跑，零服务器内存，OCR 自动识别保留，截图不出本机。
+
+```bash
+# 1. 构建独立 Python 运行时（python-build-standalone + venv，产物 desktop/python-runtime/）
+bash desktop/build-python.sh
+
+# 2. 装 Electron（开发态）
+cd desktop && npm install
+
+# 3. 起桌面（开发态，复用项目根目录的 src/web/fonts/data）
+npm start                      # 等价于 electron . --no-pack
+
+# 4. 打包为 .app/.dmg（macOS）
+npm run dist
+```
+
+要点：
+- Electron 主进程 `spawn` 内嵌 Python 运行 `src.server`，并设 `FONTOP_NO_BROWSER=1` 抑制服务端自动开系统浏览器（窗口由 Electron 托管）。
+- `desktop/build-python.sh` 用 `python-build-standalone` 产出与开发环境版本一致的独立运行时，避免依赖用户机器已装 Python。
+- `electron-builder` 配置见 `desktop/package.json` 的 `build` 字段：`extraResources` 把 `web/ fonts/ data/ src/ tools/` 一并打进 app，运行时路径由 `main.js` 的 `resourcesPath` 解析。
+- 跨平台：改 `build-python.sh` 的 `ARCH`（如 `x86_64-apple-darwin` / `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu`），`electron-builder` 的 `mac` 改 `win`/`linux` 目标即可。
+- 打包前需先建索引（见上「重建字形索引」），产物 `data/glyph_index.npz` 会被一并打包。
+
 ### 怎么用
 
 ```

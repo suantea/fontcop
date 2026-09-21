@@ -275,10 +275,15 @@ def start_server(open_browser: bool = True) -> ThreadingHTTPServer | None:
       * 端口已被本应用占用（旧实例/上次双击残留）→ 打开浏览器界面后返回 None
       * 正常启动 → 预热索引 → 后台预热 OCR → 可选自动打开浏览器
     - 部署模式（HOST 非回环）: 跳过单实例/自动开浏览器，方便反代与进程管理托管。
+    - FONTOP_NO_BROWSER=1（Electron 本地软件形态）：跳过单实例保护 + 不自动开浏览器，
+      交给 Electron 窗口托管界面；端口冲突由调用方（Electron）处理。
     """
+    no_browser = bool(os.environ.get("FONTOP_NO_BROWSER"))  # Electron 接管窗口
+
     # 单实例保护（仅本机模式）：端口已被占用时不再重复起服务，
-    # 只确保浏览器打开界面后退出自身，避免 GUI 双击堆积进程。
-    if _IS_LOCAL:
+    # 只确保浏览器打开界面退出自身，避免 GUI 双击堆积进程。
+    # FONTOP_NO_BROWSER 时跳过（Electron 自行管理单实例）。
+    if _IS_LOCAL and not no_browser:
         import socket
         port_busy = False
         try:

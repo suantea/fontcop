@@ -2,7 +2,7 @@
 
 开源字体版权识别工具：截图 → OCR/框选提取字符 → 与内置开源字体白名单做字形级比对 → 四态判定（free / suspect / risky / unknown）。详细设计见 `README.md`。
 
-**产品形态：Web 页面（本地源码运行 + 可部署为公网/内网 Web 服务）。已放弃 exe / pywebview / 托盘。** 残留的 exe 时代产物（FontCop.spec、src/app.py、src/tray.py、start.sh、build-windows.yml、pyinstaller/frozen 分支）已删除；`.venv` 各机器自建，勿提交。
+**产品形态：三选一** —— ① Web 页面本地源码运行；② 部署为公网/内网 Web 服务（反代托管）；③ 本地桌面软件（Electron 外壳 + 内嵌 Python 比对后端，`desktop/` 目录，打包为 .app/.exe，比对全在本机、零服务器内存、OCR 保留）。**已放弃 exe / pywebview / 托盘 的独立打包路线，但 Electron 嵌 Python 是受支持的桌面形态。** 残留的 exe 时代产物（FontCop.spec、src/app.py、src/tray.py、start.sh、build-windows.yml、pyinstaller/frozen 分支）已删除；`.venv` 与 `desktop/python-runtime/`、`desktop/node_modules/` 各机器自建，勿提交。
 
 ## 常用命令
 
