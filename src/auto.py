@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import os
 import threading
 from pathlib import Path
 
@@ -49,6 +50,11 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
     """
     img_bytes = base64.b64decode(image_b64)
     im = Image.open(io.BytesIO(img_bytes)).convert("RGB")
+    # 超大图先缩到合理尺寸：OCR 对超大图检出更差且更耗时；前端已缩，这里兜底第三方/旧客户端
+    _auto_max_edge = float(os.environ.get("FONTOP_AUTO_MAX_EDGE", "2200"))
+    if max(im.size) > _auto_max_edge:
+        s = _auto_max_edge / max(im.size)
+        im = im.resize((max(1, round(im.width * s)), max(1, round(im.height * s))), Image.BILINEAR)
     ocr = get_ocr()
 
     result = None
@@ -75,14 +81,18 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
         # 逐段对全部字体×全部字做向量化 IoU 搜索（~30ms/段），按字体投票。
         return _fallback_line(matcher, im)
 
+    # RapidOCR 偶发返回 None 坐标/文本/分数（上游版本性抖动），先整体过滤，避免排序/循环 TypeError
+    valid = [r for r in (result or [])
+             if r and r[0] and r[1] is not None and all(p is not None for p in r[0])
+             and len(r) > 2 and r[2] is not None]
     # 按检测框面积降序，取前 max_lines 行
-    boxes = sorted(result, key=lambda r: (r[0][2][0] - r[0][0][0]) * (r[0][2][1] - r[0][0][1]), reverse=True)[:max_lines]
+    boxes = sorted(valid, key=lambda r: (r[0][2][0] - r[0][0][0]) * (r[0][2][1] - r[0][0][1]), reverse=True)[:max_lines]
 
     marks = []
     per_font: dict[str, dict] = {}
     per_seg: list[dict] = []
     for box, text, score in boxes:
-        if float(score) < 0.6:
+        if score is None or float(score) < 0.6:
             continue
         xs = [p[0] for p in box]
         ys = [p[1] for p in box]

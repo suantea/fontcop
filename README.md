@@ -54,9 +54,10 @@ python3 -m venv .venv
 |------|------|------|
 | `FONTOP_HOST` | `127.0.0.1` | 绑定地址；部署设 `0.0.0.0` 或由反代转发。非回环时自动跳过「单实例保护/自动开浏览器」 |
 | `FONTOP_PORT` | `8642` | 监听端口 |
-| `FONTOP_MAX_BODY` | `16777216` | 请求体上限（字节），防大图打爆内存 |
+| `FONTOP_MAX_BODY` | `50331648` | 请求体上限（字节，默认 48MB，兼容 4K/5K 截图原图）。前端发送前会缩图，正常请求 <5MB；公网部署可调小（如 `16777216`） |
 | `FONTOP_TOKEN` | 空 | 设值后所有页面/API 需 `Authorization: Bearer <token>`（或 `X-FontCop-Token`）；`/healthz` 除外 |
 | `FONTOP_CORS_ORIGIN` | 空 | 需要跨域访问时设为来源（如 `https://site.example`），并允许 OPTIONS 预检 |
+| `FONTOP_AUTO_MAX_EDGE` | `2200` | 自动识别前把图片最长边缩到此像素（服务端兜底，前端已先缩） |
 | `FONTOP_NO_OCR` | 空 | `1` 关闭自动识别（退回手动框选），省 OCR 模型体积与并发成本 |
 
 ```bash

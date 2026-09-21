@@ -9,6 +9,41 @@
   let img = null;            // 当前 Image 对象
   let marks = [];            // [{x1,y1,x2,y2,char}]
   let pendingBox = null;     // 正在框选的区域
+  let inFlight = null;       // 进行中的 fetch AbortController（重置/超时时可中断）
+  let suppressErr = false;   // 重置主动中止时不弹错误提示
+
+  // 带超时的 fetch：避免「卡在自动识别中」——超时/服务无响应时一定给出提示并恢复按钮
+  function fetchTimeout(url, init, ms) {
+    const ctrl = new AbortController();
+    const t = setTimeout(() => ctrl.abort(new DOMException("timeout", "TimeoutError")), ms);
+    inFlight = ctrl;
+    return fetch(url, { ...init, signal: ctrl.signal }).finally(() => {
+      clearTimeout(t);
+      if (inFlight === ctrl) inFlight = null;
+    });
+  }
+
+  function errText(err) {
+    if (suppressErr || err && err.name === "AbortError") return null;
+    if (err && err.name === "TimeoutError") return "识别超时（服务忙或无响应），请重试";
+    const m = err && err.message;
+    if (m && /load failed|failed to fetch|networkerror/i.test(m)) return "网络错误：服务无响应（请确认服务在运行后重试）";
+    return m || String(err);
+  }
+
+  function resetAll() {
+    suppressErr = true;
+    if (inFlight) { try { inFlight.abort(); } catch { /* ignore */ } inFlight = null; }
+    img = null; marks = []; pendingBox = null; dragStart = null;
+    $("dropzone").hidden = false;
+    $("canvas-wrap").hidden = true;
+    $("result").hidden = true;
+    $("result-empty").hidden = false;
+    $("btn-auto").disabled = false;
+    $("btn-run").disabled = true;
+    updateMarks();
+    suppressErr = false;
+  }
 
   // ---------- 图片载入 ----------
   function loadImageFile(file) {
@@ -77,12 +112,7 @@
         const im = new Image();
         im.onload = async () => {
           img = im; marks = []; showCanvas();
-          const c = document.createElement("canvas");
-          c.width = img.naturalWidth; c.height = img.naturalHeight;
-          c.getContext("2d").drawImage(img, 0, 0);
-          const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
-          const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
-          await doAutoRecognize(b64);
+          await doAutoRecognize(await autoImageB64(img));
         };
         im.src = URL.createObjectURL(blob);
         e.preventDefault();
@@ -90,22 +120,6 @@
       }
     }
   });
-
-  // 页面聚焦时自动读取剪贴板截图（不覆盖正在编辑的图）
-  async function tryClipboardImage() {
-    try {
-      const items = await navigator.clipboard.read();
-      for (const item of items) {
-        const type = item.types.find((t) => t.startsWith("image/"));
-        if (type) {
-          const blob = await item.getType(type);
-          if (img === null) loadImageFile(blob);
-          return;
-        }
-      }
-    } catch { /* 无权限或剪贴板无图：静默忽略，用户可 Ctrl+V */ }
-  }
-  window.addEventListener("focus", tryClipboardImage);
 
   // ---------- 框选 ----------
   let dragStart = null;
@@ -174,7 +188,7 @@
     if (e.key === "Escape") closeCharDialog();
   });
 
-  $("btn-reset").onclick = () => { marks = []; redraw(); updateMarks(); };
+  $("btn-reset").onclick = resetAll;
 
   // ---------- 识别 ----------
   async function cropAndSend() {
@@ -191,31 +205,44 @@
       payloadMarks.push({ image_b64: b64, char: m.char });
     }
     try {
-      const resp = await fetch("/api/match", {
+      const resp = await fetchTimeout("/api/match", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ marks: payloadMarks }),
-      });
+      }, 20000);
       renderResult(await resp.json());
     } catch (err) {
-      $("marks-info").textContent = "识别失败：" + err.message;
+      const m = errText(err);
+      if (m) $("marks-info").textContent = "识别失败：" + m;
+    } finally {
+      $("btn-run").disabled = marks.length === 0;
     }
-    updateMarks();
   }
   $("btn-run").onclick = cropAndSend;
 
    // ---------- 自动识别（RapidOCR）----------
    // 复用：把“编码→POST→渲染”抽成函数，避免按钮和粘贴重复代码
-   async function doAutoRecognize(b64) {
+   const MAX_AUTO_EDGE = 1600;  // 发送前把整图缩到该边长：4K 截图原图 base64 可 >16MB 击穿请求体上限，且 OCR 对超大图反而检出更差
+   async function autoImageB64(inIm) {
+     const w = inIm.naturalWidth, h = inIm.naturalHeight;
+     const scale = Math.min(1, MAX_AUTO_EDGE / Math.max(w, h));
+     const c = document.createElement("canvas");
+     c.width = Math.max(1, Math.round(w * scale));
+     c.height = Math.max(1, Math.round(h * scale));
+     c.getContext("2d").drawImage(inIm, 0, 0, c.width, c.height);
+     const blob = await new Promise((res) => c.toBlob(res, "image/png"));
+     return btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
+   }
+async function doAutoRecognize(b64) {
      const btn = $("btn-auto");
      btn.disabled = true;
      $("marks-info").textContent = "自动识别中…";
      try {
-       const resp = await fetch("/api/auto", {
+       const resp = await fetchTimeout("/api/auto", {
          method: "POST",
          headers: { "Content-Type": "application/json" },
          body: JSON.stringify({ image_b64: b64 }),
-       });
+       }, 60000);
        const r = await resp.json();
        if (r.error) {
          $("marks-info").textContent = "自动识别失败：" + r.error;
@@ -225,63 +252,16 @@
        if (r.chars_used) $("marks-info").textContent = "自动使用字符：" + r.chars_used.join(" ");
        renderResult(r);
      } catch (err) {
-       $("marks-info").textContent = "自动识别失败：" + err.message + "（可回退手动框选）";
+       const m = errText(err);
+       if (m) $("marks-info").textContent = "自动识别失败：" + m + "（可回退手动框选）";
+     } finally {
+       btn.disabled = false;
      }
-     btn.disabled = false;
    }
    $("btn-auto").onclick = async () => {
      if (!img) return;
-     const c = document.createElement("canvas");
-     c.width = img.naturalWidth; c.height = img.naturalHeight;
-     c.getContext("2d").drawImage(img, 0, 0);
-     const blob = await new Promise((res) => c.toBlob(res, "image/png"));
-     const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob.arrayBuffer())));
-     await doAutoRecognize(b64);
+     await doAutoRecognize(await autoImageB64(img));
    };
-   // 粘贴按钮：读取剪贴板图片并自动识别（连续使用）
-   $("btn-paste").onclick = async () => {
-     try {
-       const items = await navigator.clipboard.read();
-       for (const item of items) {
-         const type = item.types.find((t) => t.startsWith("image/"));
-         if (type) {
-           const blob = await item.getType(type);
-           const c = document.createElement("canvas");
-           const im = new Image();
-           im.onload = async () => {
-             img = im; marks = []; showCanvas();
-             const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
-             const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
-             await doAutoRecognize(b64);
-           };
-           im.src = URL.createObjectURL(blob);
-           return;
-         }
-       }
-       $("marks-info").textContent = "剪贴板中没有图片";
-     } catch { $("marks-info").textContent = "读取剪贴板失败（可能需要手动粘贴）"; }
-   };
-   // 页面级粘贴（Ctrl+V）：加载图片后自动识别，实现连续使用
-   document.addEventListener("paste", (e) => {
-     for (const item of e.clipboardData.items) {
-       if (item.type.startsWith("image/")) {
-         const blob = item.getAsFile();
-         const im = new Image();
-         im.onload = async () => {
-           img = im; marks = []; showCanvas();
-           const c = document.createElement("canvas");
-           c.width = img.naturalWidth; c.height = img.naturalHeight;
-           c.getContext("2d").drawImage(img, 0, 0);
-           const blob2 = await new Promise((res) => c.toBlob(res, "image/png"));
-           const b64 = btoa(String.fromCharCode(...new Uint8Array(await blob2.arrayBuffer())));
-           await doAutoRecognize(b64);
-         };
-         im.src = URL.createObjectURL(blob);
-         e.preventDefault();
-         return;
-       }
-     }
-   });
 
   // ---------- 结果渲染 ----------
   const VERDICTS = {

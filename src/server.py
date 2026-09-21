@@ -10,7 +10,9 @@ import hmac
 import io
 import json
 import os
+import sys
 import time
+import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
@@ -33,7 +35,9 @@ def _env(key: str, default: str) -> str:
 
 HOST = _env("FONTOP_HOST", "127.0.0.1")                            # 部署时设 0.0.0.0 或交给反代
 PORT = int(_env("FONTOP_PORT", "8642"))
-MAX_BODY = int(_env("FONTOP_MAX_BODY", str(16 * 1024 * 1024)))     # 请求体上限，防大图打爆内存
+# 请求体上限：默认 48MB 覆盖 4K/5K 截图原图 base64（前端会自动缩图，正常请求 <5MB）。
+# 部署到公网时可调小（如 16MB）。
+MAX_BODY = int(_env("FONTOP_MAX_BODY", str(48 * 1024 * 1024)))
 TOKEN = _env("FONTOP_TOKEN", "") or None                           # 设值后所有页面/API 需 Bearer token
 CORS_ORIGIN = _env("FONTOP_CORS_ORIGIN", "") or None               # 需跨域访问时设来源域名
 
@@ -124,6 +128,10 @@ def _append_history(resp: dict, chars: list[str]) -> None:
         pass
 
 
+class _BodyTooLarge(ValueError):
+    """请求体超过 MAX_BODY：客户端可能仍在传输，需先回 413 并断开连接，避免断管/卡死。"""
+
+
 class Handler(BaseHTTPRequestHandler):
     def log_message(self, fmt, *args):  # 安静模式
         pass
@@ -143,8 +151,10 @@ class Handler(BaseHTTPRequestHandler):
         if length is None:
             raise ValueError("missing Content-Length")
         n = int(length)
-        if n <= 0 or n > MAX_BODY:
-            raise ValueError(f"body too large: {n} > {MAX_BODY}")
+        if n <= 0:
+            raise ValueError("missing Content-Length")
+        if n > MAX_BODY:
+            raise _BodyTooLarge(f"body too large: {n} > {MAX_BODY}")
         body = self.rfile.read(n)
         return json.loads(body)
 
@@ -161,6 +171,20 @@ class Handler(BaseHTTPRequestHandler):
     def _json(self, code: int, obj: dict) -> None:
         self._send(code, json.dumps(obj, ensure_ascii=False).encode("utf-8"),
                    "application/json; charset=utf-8")
+
+    def _json_close(self, code: int, obj: dict) -> None:
+        """带 Connection: close 的 JSON 响应：用于请求体未读完就需拒绝的场景。"""
+        body = json.dumps(obj, ensure_ascii=False).encode("utf-8")
+        self.send_response(code)
+        self.send_header("Content-Type", "application/json; charset=utf-8")
+        self.send_header("Content-Length", str(len(body)))
+        self.send_header("Cache-Control", "no-store")
+        self.send_header("Connection", "close")
+        if CORS_ORIGIN:
+            self.send_header("Access-Control-Allow-Origin", CORS_ORIGIN)
+        self.end_headers()
+        self.wfile.write(body)
+        self.close_connection = True
 
     def do_OPTIONS(self):  # noqa: N802  # CORS 预检
         self.send_response(204)
@@ -212,9 +236,12 @@ class Handler(BaseHTTPRequestHandler):
         if path == "/api/match":
             try:
                 self._json(200, handle_match(self._read_json()))
+            except _BodyTooLarge as e:
+                self._json_close(413, {"error": f"request too large: {e}"})
             except (ValueError, json.JSONDecodeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
             except Exception as e:  # noqa: BLE001
+                traceback.print_exc(file=sys.stderr)
                 self._json(500, {"error": str(e)})
         elif path == "/api/auto":
             try:
@@ -230,9 +257,12 @@ class Handler(BaseHTTPRequestHandler):
                 resp = auto_match(get_matcher(), payload["image_b64"])
                 resp["elapsed"] = round(time.time() - t0, 3)
                 self._json(200, resp)
+            except _BodyTooLarge as e:
+                self._json_close(413, {"error": f"request too large: {e}"})
             except (ValueError, json.JSONDecodeError) as e:
                 self._json(400, {"error": f"bad request: {e}"})
             except Exception as e:  # noqa: BLE001
+                traceback.print_exc(file=sys.stderr)
                 self._json(500, {"error": str(e)})
         else:
             self._json(404, {"error": "not found"})

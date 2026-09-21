@@ -4,3 +4,6 @@ pillow>=10.0
 fonttools>=4.40
 # OCR 自动识别（可选：不安装则前端退回手动框选模式；FONTOP_NO_OCR=1 可显式关闭）
 rapidocr-onnxruntime>=1.2.0
+# opencv 5.0.0 起新 NEON resize 核（kleidicv）在 macOS/arm64 特定输入尺寸上 SIGSEGV，
+# 会把整个服务进程打崩（前端表现为「自动识别失败：Load failed」）。锁 <5。
+opencv-python>=4.11.0.86,<5

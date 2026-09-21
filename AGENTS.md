@@ -38,7 +38,7 @@
 
 ### 部署配置（环境变量，详见 README「部署」）
 
-`FONTOP_HOST` / `FONTOP_PORT` / `FONTOP_MAX_BODY` / `FONTOP_TOKEN` / `FONTOP_CORS_ORIGIN` / `FONTOP_NO_OCR`。
+`FONTOP_HOST` / `FONTOP_PORT` / `FONTOP_MAX_BODY` / `FONTOP_TOKEN` / `FONTOP_CORS_ORIGIN` / `FONTOP_AUTO_MAX_EDGE` / `FONTOP_NO_OCR`。
 
 ## 项目特有注意事项
 
@@ -47,6 +47,8 @@
 - **子集化字体**：比对/打包只用 `fonts/subset/`（12 款共 ~4MB，`src/render.glyph_files()` 优先子集、缺则回退 `fonts/files/` 全量）。全量 `fonts/files/` 192MB 仅本地校验用、不打包。`inter`/`jetbrains-mono`/`dejavu-sans` 缺源文件，未子集化、空字形不参与比对（`tests/test_m1_regression.py` 依赖全量字体文件，缺文件时会 AssertionError——已知）。
 - **同源字体合并展示**：Noto/思源等字形相同的字体在 `fonts.json` 中各占一条（比对引擎需要各自的 font_id）。识别结果（候选 + 逐字 top）与白名单弹窗均按 `src/pipeline.py` 的 `DUP_GROUPS`/`_group_of()` 归并：组内第一个成员为展示代表（优先中文名「思源黑体/思源宋体」），其余成员（Noto 等英文名）只参与比对、不单独出现。改字体列表时留意此机制。
 - **`.venv` 是机器相关产物**：跨机器/跨平台必须重建（macOS/Linux：`python3 -m venv .venv && .venv/bin/pip install -r requirements.txt`；Windows 路径不同）。requirements 用宽松下界（>=），已在 Python 3.9/3.14 跑通。
+- **opencv 必须 <5**：opencv-python 5.0 起新版 NEON resize 核（kleidicv）在 macOS/arm64 的个别输入尺寸上必现 SIGSEGV（如 3080×2117），会把整个服务进程打死，前端表现为「自动识别失败：Load failed」。requirements 已锁 `opencv-python>=4.11.0.86,<5`；重建环境/升级依赖时勿装 5.x。另外 `web/app.js` 与 `src/auto.py` 都会在 OCR 前把图缩到合适边长（≤1600/2200），降低超大图对 OCR 的检出与内存压力。
+- **OCR 建议独立子进程隔离**：RapidOCR 在异常输入（超大图、依赖版本不合）下可能 SIGSEGV/永久挂起。目前 ocr 与 HTTP 服务在同一进程内运行，一次 OCR 崩溃就会打死整个服务（前端表现为「自动识别失败：Load failed / 卡自动识别中」）。已知可穷举到的崩点已靠 opencv 锁 <5 堵住，但无法枚举所有输入；若再次出现 OCR 引发整服务死亡，应把 RapidOCR 挪进独立子进程（子进程内初始化、可超时/重启隔离），不要继续在同一进程里堆锁。前端已做 60s 超时与按钮恢复兜底，但根治靠隔离，勿回退为依赖前端容错。
 - **`.bak` 文件是历史快照**，不要读取或基于其改动；根目录日志/临时文件（`*.log`、`nul`、`_tmp_*`、`_probe*`）均已 gitignore。
 
 ## 维护规则
