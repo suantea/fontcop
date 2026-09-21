@@ -8,18 +8,21 @@ DESKTOP_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT="$(dirname "$DESKTOP_DIR")"
 OUT="$DESKTOP_DIR/python-runtime"
 
-# 平台：这里按 macOS arm64 构建；跨平台需改下面的 VERSION/ARCH
-PY_VER="3.14"            # 与项目开发环境一致
-PBS_VER="20250317"       # python-build-standalone 发布日期标签
+# 平台：这里按 macOS arm64 构建；跨平台需改下面的 PY_VER/PBS_VER/ARCH
+PY_VER="3.14"            # 与项目开发环境一致（python-build-standalone 用 X.Y.Z 全版本号）
+PY_FULL="3.14.7"         # 具体补丁版本（release 资产按此命名）
+PBS_VER="20260901"       # python-build-standalone 发布日期标签（releases/tags/<此值>）
 ARCH="aarch64-apple-darwin"
-TAG="cpython-${PY_VER}+${PBS_VER}"
-URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VER}/cpython-${PY_VER}-${PBS_VER}-${ARCH/-apple-/-apple/}-install_only.tar.gz"
+URL="https://github.com/astral-sh/python-build-standalone/releases/download/${PBS_VER}/cpython-${PY_FULL}+${PBS_VER}-${ARCH}-install_only.tar.gz"
 
 TMP="$(mktemp -d)"
 trap 'rm -rf "$TMP"' EXIT
 
-echo "== 下载 python-build-standalone ($TAG) =="
-curl -fL --retry 3 -o "$TMP/py.tgz" "$URL"
+echo "== 下载 python-build-standalone (cpython-${PY_FULL}+${PBS_VER}) =="
+# 用 HTTP/1.1 + 断点续传避免大文件传输中 HTTP2 framing 层断流（GitHub CDN 在弱网下常见）
+curl -fL --retry 5 --retry-all-errors -C - --http1.1 -o "$TMP/py.tgz" "$URL"
+# 校验：tar 能列出即下载完整
+tar -tzf "$TMP/py.tgz" >/dev/null || { echo "下载不完整或 corrupted，请重试"; exit 1; }
 
 echo "== 解压到 $OUT =="
 rm -rf "$OUT"
