@@ -8,6 +8,10 @@ rapidocr-onnxruntime>=1.2.0
 # 到 24 个函数（resize/cvtColor/fillPoly/warpPerspective/findContours 等），已由
 # src/cv2_shim.py 用 Pillow+NumPy 等价实现，并在 OCR 子进程 import 前顶替 cv2。
 # 同图比对过：真 cv2 得「的国人民」0.7991，shim 得 0.7993，结果一致。
+# 实战坑：rapidocr-onnxruntime 把 opencv-python 声明为**传递依赖**，光在这里不写
+# 是没用的 —— pip 照样装回来（还是 5.x）。pip 没有「负向依赖」语法（试过
+# `opencv-python<0` 这类 no-op 约束，无效），所以真正的落点在 build_python.sh：
+# 装完依赖后显式 pip uninstall opencv-python，并用校验卡死（失败即构建红）。
 # 历史坑（保留）：opencv 5.0 起新 NEON resize 核在 macOS/arm64 个别尺寸必现 SIGSEGV；
 # 现在不再依赖 opencv，这类崩溃面直接消失。若确需真 opencv 调试，临时
 # `pip install "opencv-python>=4.11.0.86,<5"` 即可 —— shim 只在 cv2 缺失时兜底。

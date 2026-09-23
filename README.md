@@ -84,13 +84,15 @@ python-runtime/bin/python3 -m src.indexer        # macOS/Linux
 bash package.sh                                  # 产物 FontCop-<platform>.zip
 
 # 4. 使用：解压后双击 start.command（mac）/ start.bat（win）→ 自动起服务并开浏览器
+#    停止服务：页面右上角「⏻ 关闭服务」按钮（调 POST /api/shutdown，仅本机回环可用）
 ```
 
 要点：
 - `build_python.sh` 用 `python-build-standalone` 产出与开发环境版本一致的独立运行时，避免依赖用户机器已装 Python（Windows 上二进制是 `python-runtime/python.exe`，mac/linux 是 `python-runtime/bin/python3`）。
-- `package.sh` 把项目源码 + `fonts/subset/` + `data/glyph_index.npz` + `python-runtime/` 打成 zip，解压即用。
+- `package.sh` 把项目源码 + `fonts/subset/` + `data/glyph_index.npz` + `python-runtime/` 打成 zip，解压即用；打包时剔除 `pip`、`fontTools`、`include/`、`share/`、`*.dist-info/` 等运行期用不到的文件（mac/win 同一套规则，共省 ~60MB）。
 - 跨平台：改 `build_python.sh` 顶部的 `PY_FULL`/`PBS_VER` 或设 `PBS_ARCH`（如 `x86_64-apple-darwin` / `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu`）即可。
-- 体积主要来自 OCR 引擎（onnxruntime 80MB + opencv 120MB，RapidOCR 必需）；后续可选优化是剥离 opencv 仅保留 RapidOCR 实际用到的变换（Pillow 替代）。
+- 体积主要来自 OCR 引擎（onnxruntime 80MB，必需）；**已剥离 opencv**（原 120MB，现由 `src/cv2_shim.py` 用 Pillow+NumPy 等价顶替），目前 mac zip 约 112MB。
+- 想要双击图标（mac）：`bash tools/make_mac_app.sh` 生成 `FontCop.app`（osacompile 骨架 + shell 入口，非 Electron），双击起服务；关服务同样走页面按钮。
 
 ### 怎么用
 

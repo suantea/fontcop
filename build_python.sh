@@ -43,17 +43,29 @@ PY_EXE="$OUT/$PY_EXE_REL"
 "$PY_EXE" -m ensurepip
 "$PY_EXE" -m pip install -r "$ROOT/requirements.txt"
 
+# rapidocr-onnxruntime 把 opencv-python 声明为传递依赖，pip 必然装回来（且是 5.x）。
+# pip 没有「负向依赖」，只能装完卸载 —— 这是剥离 opencv 唯一可靠的落点。
+# 校验卡在下游：卸载失败会直接让构建红掉，不会把带 opencv 的包发出去。
+echo "== 移除 opencv（改用 src/cv2_shim.py）=="
+"$PY_EXE" -m pip uninstall -y opencv-python opencv-python-headless 2>/dev/null || true
+
 echo "== 校验关键依赖 =="
 # cv2 不再随包安装（见 requirements.txt）：src/cv2_shim.py 在 OCR 子进程内顶替它。
 # 校验必须覆盖「无 opencv 也能起 OCR」这条真实路径，否则打包出去才发现是 501。
 "$PY_EXE" -c "import numpy, PIL, rapidocr_onnxruntime; print('deps ok')"
 "$PY_EXE" -c "
+try:
+    import cv2
+except ImportError:
+    pass
+else:
+    raise SystemExit('opencv 仍可导入，卸载步骤失效：%s' % getattr(cv2, '__file__', '?'))
 import sys
 sys.path.insert(0, '$ROOT')
 from src.auto import _install_cv2_shim_if_needed
 _install_cv2_shim_if_needed()
 import cv2
-assert not hasattr(cv2, '__file__') or 'cv2_shim' in (cv2.__file__ or ''), 'cv2 应来自 shim 而非 opencv'
+assert 'cv2_shim' in (cv2.__file__ or ''), 'cv2 应来自 shim 而非 opencv'
 print('cv2 shim ok:', getattr(cv2, '__version__', '?'))
 "
 
