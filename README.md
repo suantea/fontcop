@@ -68,30 +68,29 @@ FONTOP_HOST=0.0.0.0 FONTOP_TOKEN=your-token .venv/bin/python -m src.server
 - 建议在反代层加 HTTPS 与限流（caddy/nginx），见 `docs/DEPLOY.md`。
 - 隐私提示：截图内容会上传到服务端比对，公网使用请在页面显著位置声明「不构成法律意见、图片不留存」（当前实现不存原图，仅落 `data/history.jsonl` 元数据）。
 
-### 本地桌面软件（Electron 外壳 + 内嵌 Python 后端）
+### 绿色分发版（解压即用，比对全本机）
 
-适合「服务器弱/访问慢、主要自己用」的场景：比对全在本机跑，零服务器内存，OCR 自动识别保留，截图不出本机。
+适合「服务器弱/访问慢、主要自己用」的场景：比对全在本机跑，零服务器内存，OCR 自动识别保留，截图不出本机。分发就是一份 zip + 一份独立 Python，**不再做 Electron/.dmg/.exe**（那层壳本质就是带 Python 后端的 webview，对"本地起服务+开浏览器"是过度工程）。
 
 ```bash
-# 1. 构建独立 Python 运行时（python-build-standalone + venv，产物 desktop/python-runtime/）
-bash desktop/build-python.sh
+# 1. 构建独立 Python 运行时（python-build-standalone + 依赖，产物 ./python-runtime/）
+bash build_python.sh
 
-# 2. 装 Electron（开发态）
-cd desktop && npm install
+# 2. 建字形索引（首次必做；改字体白名单/阈值后也要重跑）
+python-runtime/bin/python3 -m src.indexer        # macOS/Linux
+# python-runtime\python.exe -m src.indexer        # Windows
 
-# 3. 起桌面（开发态，复用项目根目录的 src/web/fonts/data）
-npm start                      # 等价于 electron . --no-pack
+# 3. 打包为绿色 zip（含 项目源码 + 字体子集 + 索引 + python-runtime）
+bash package.sh                                  # 产物 FontCop-<platform>.zip
 
-# 4. 打包为 .app/.dmg（macOS）
-npm run dist
+# 4. 使用：解压后双击 start.command（mac）/ start.bat（win）→ 自动起服务并开浏览器
 ```
 
 要点：
-- Electron 主进程 `spawn` 内嵌 Python 运行 `src.server`，并设 `FONTOP_NO_BROWSER=1` 抑制服务端自动开系统浏览器（窗口由 Electron 托管）。
-- `desktop/build-python.sh` 用 `python-build-standalone` 产出与开发环境版本一致的独立运行时，避免依赖用户机器已装 Python。
-- `electron-builder` 配置见 `desktop/package.json` 的 `build` 字段：`extraResources` 把 `web/ fonts/ data/ src/ tools/` 一并打进 app，运行时路径由 `main.js` 的 `resourcesPath` 解析。
-- 跨平台：改 `build-python.sh` 的 `ARCH`（如 `x86_64-apple-darwin` / `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu`），`electron-builder` 的 `mac` 改 `win`/`linux` 目标即可。
-- 打包前需先建索引（见上「重建字形索引」），产物 `data/glyph_index.npz` 会被一并打包。
+- `build_python.sh` 用 `python-build-standalone` 产出与开发环境版本一致的独立运行时，避免依赖用户机器已装 Python（Windows 上二进制是 `python-runtime/python.exe`，mac/linux 是 `python-runtime/bin/python3`）。
+- `package.sh` 把项目源码 + `fonts/subset/` + `data/glyph_index.npz` + `python-runtime/` 打成 zip，解压即用。
+- 跨平台：改 `build_python.sh` 顶部的 `PY_FULL`/`PBS_VER` 或设 `PBS_ARCH`（如 `x86_64-apple-darwin` / `x86_64-unknown-linux-gnu` / `aarch64-unknown-linux-gnu`）即可。
+- 体积主要来自 OCR 引擎（onnxruntime 80MB + opencv 120MB，RapidOCR 必需）；后续可选优化是剥离 opencv 仅保留 RapidOCR 实际用到的变换（Pillow 替代）。
 
 ### 怎么用
 

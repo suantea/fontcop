@@ -19,6 +19,10 @@ fonts/system_fonts.json
 fonts/symbols.json
 fonts/coverage.json
 
+# 分发产物（独立 Python 运行时 + 绿色 zip，各机器按平台 build/打包，勿提交）
+python-runtime/
+FontCop-*.zip
+
 # 临时/日志/调试残留（误重定向、探针、自检截图）
 *.log
 nul
@@ -33,4 +37,3 @@ _probe*
 # AtomCode local-scope configs (machine-specific)
 .atomcode/
 .anchors/
-dist-win/

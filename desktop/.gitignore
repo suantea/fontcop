@@ -1,5 +1,0 @@
-# Electron 桌面版产物（运行时自构建，勿提交）
-python-runtime/
-node_modules/
-dist/
-*.dmg

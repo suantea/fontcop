@@ -2,18 +2,19 @@
 
 开源字体版权识别工具：截图 → OCR/框选提取字符 → 与内置开源字体白名单做字形级比对 → 四态判定（free / suspect / risky / unknown）。详细设计见 `README.md`。
 
-**产品形态：三选一** —— ① Web 页面本地源码运行；② 部署为公网/内网 Web 服务（反代托管）；③ 本地桌面软件（Electron 外壳 + 内嵌 Python 比对后端，`desktop/` 目录，打包为 .app/.exe，比对全在本机、零服务器内存、OCR 保留）。**已放弃 exe / pywebview / 托盘 的独立打包路线，但 Electron 嵌 Python 是受支持的桌面形态。** 残留的 exe 时代产物（FontCop.spec、src/app.py、src/tray.py、start.sh、build-windows.yml、pyinstaller/frozen 分支）已删除；`.venv` 与 `desktop/python-runtime/`、`desktop/node_modules/` 各机器自建，勿提交。
+**产品形态：两种** —— ① 本地源码运行（`.venv` + `python -m src.server`，浏览器访问）；② 绿色分发版（打包为解压即用的 zip：项目源码 + 独立 `python-runtime/` + 字体子集 + 字形索引，双击 `start.command`/`start.bat` 启动，**比对全在本机、零服务器内存、OCR 保留**）。**已放弃 Electron/.app/.exe/pywebview/托盘 等所有打包壳路线**——它们本质是带 Python 后端的 webview，对"本地起服务+开浏览器"是过度工程。`.venv` 与 `python-runtime/`（绿色版独立 Python）、`FontCop-*.zip` 各机器按平台自建/打包，勿提交。
 
-### 桌面版构建（mac .dmg / Windows .exe）
+### 绿色分发版（解压即用 zip）
 
-- 本地构建：`bash desktop/build-python.sh`（自动按 OS/ARCH 下载 python-build-standalone，Windows 上跑会得到 `python.exe`）→ `cd desktop && npm install && npm run dist`（`dist:mac`/`dist:win` 分平台）。
-- **CI 双平台构建**：`.github/workflows/desktop.yml`，push 到 main 触发 `desktop/**`、`src/**` 等变更时自动构建 mac .dmg + win .exe（nsis 安装包），也可 workflow_dispatch 手动触发；产物在 Actions run 的 artifacts 里下载（FontCop-mac / FontCop-win）。未配签名证书，`CSC_IDENTITY_AUTO_DISCOVERY=false` 跳过 macOS 签名。
-- Windows 运行时差异：python-build-standalone 的 Windows 资产解压后**无 bin/ 目录**，二进制是 `python-runtime/python.exe`（非 `bin/python3`），`main.js` 已按 `process.platform` 分支处理。
+- 构建独立 Python 运行时：`bash build_python.sh`（自动按 OS/ARCH 下载 python-build-standalone，装好依赖，产物 `python-runtime/`；Windows 上二进制是 `python-runtime/python.exe`，mac/linux 是 `python-runtime/bin/python3`）。
+- 建字形索引：`python-runtime/bin/python3 -m src.indexer`（首次必做）。
+- 打包 zip：`bash package.sh` → 产物 `FontCop-<platform>.zip`，含 项目源码 + `fonts/subset/` + `data/glyph_index.npz` + `python-runtime/`，解压后双击 `start.command`(mac)/`start.bat`(win) 即起服务并开浏览器。
+- **不再做 Electron/.dmg/.exe**：分发就是一份 zip + 一份独立 Python,体积主要来自 OCR 引擎（onnxruntime 80MB + opencv 120MB，RapidOCR 必需），业务代码零 `cv2` 依赖；如需再压体积，方向是剥离 opencv 仅保留 RapidOCR 实际用到的 resize/仿射变换（用 Pillow 替代），属后续优化。
 
 ## 常用命令
 
 ```bash
-# 启动服务（本机模式：自动开浏览器；Windows 等价双击 _serve.bat / _start_hidden.vbs）
+# 启动服务（本机模式：自动开浏览器）
 .venv/bin/python -m src.server         # macOS/Linux   http://127.0.0.1:8642
 .venv/Scripts/python.exe -m src.server # Windows
 
@@ -38,7 +39,7 @@
 - `src/pipeline.py` — 比对管线（IoU 粗排 top50 → SDF+NCC+HOG 精排 → 多字投票），OCR 与手动共用。
 - `src/features.py` — 相似度算法与判定阈值 `THRESHOLD_FREE=0.90`、`THRESHOLD_SUSPECT=0.75`；判定统一走 `verdict_of(score)`，`unknown` 只在 0 票/0 可比字时由调用方返回。
 - `src/edt.py` — 纯 NumPy 精确欧氏距离变换（Felzenszwalb 抛物线，O(n)），替代 scipy.ndimage.distance_transform_edt。
-- `src/auto.py` — RapidOCR 自动模式（可选依赖）。`_OCR_LOCK` 串行化 onnxruntime 调用（session 非线程安全，比对仍并行）；未安装或 `FONTOP_NO_OCR=1` 时前端退回手动。
+- `src/auto.py` — RapidOCR 自动模式（可选依赖）。**OCR 运行在独立子进程**（持久 worker + 超时 + 崩溃重启隔离），OCR 崩溃/挂起只影响子进程，父进程（HTTP 服务）超时后重启它并回退逐段搜索，绝不再打死整个服务（AGENTS.md 历史坑：OCR 与 HTTP 同进程时一次 SIGSEGV 会拖垮整服务）。未安装或 `FONTOP_NO_OCR=1` 时前端退回手动。
 - `src/indexer.py` — 生成 `data/glyph_index.npz`（gitignore，构建时可缺失）。字符集在 `fonts/common_chars.txt`（jieba 词频 top3500 + 原形近字，共 3502 汉字 + 80 标点字母数字），改字表必须重建索引。
 - `web/app.js` — 原生 JS 前端，含逐字堆叠图与 font_id→名称映射守卫。
 
