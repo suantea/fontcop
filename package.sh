@@ -33,7 +33,11 @@ ZIP="FontCop-${TAG}.zip"
 echo "== 打包 ${ZIP}（用 Python zipfile，跨平台无外部 zip 依赖）=="
 # 用项目内 Python 的 zipfile 打包：Windows runner 无 zip 命令，且需保留 unix 权限位
 "$PY" - "$ZIP" <<'PYEOF'
-import os, sys, zipfile
+import io, os, sys, zipfile
+
+# Windows 控制台默认 cp1252，直接 print 中文会 UnicodeEncodeError 让构建红掉。
+# 把 stdout 强制成 utf-8：跨平台同一套输出，无需在调用处到处 encode。
+sys.stdout = io.TextIOWrapper(sys.stdout.buffer, encoding="utf-8", errors="replace")
 
 out = sys.argv[1]
 SKIP_DIRS = {".git", ".venv", "__pycache__", ".atomcode", ".anchors", "node_modules", "dist-win", "docs"}
@@ -77,7 +81,7 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
                 while chunk := f.read(1 << 20):
                     dst.write(chunk)
 
-print(f"  写入 {sum(1 for _ in zipfile.ZipFile(out).namelist())} 个条目")
+print(f"  写入 {sum(1 for _ in zipfile.ZipFile(out).namelist())} 个条目".encode("utf-8", "replace").decode("utf-8", "replace"))
 PYEOF
 echo "== 完成：$ZIP = $(du -h "$ZIP" | cut -f1) =="
 echo "解压后双击 start.$( [[ "$OS" == Darwin ]] && echo command || echo bat ) 即可启动"
