@@ -41,6 +41,15 @@ SKIP_PREFIX = ("fonts/files/",)          # 大体积全量字体，不打包（�
 SKIP_FILES = {".DS_Store", "nul"}
 SKIP_EXT = (".pyc", ".log", ".bak", ".bak3")
 
+# 瘦身：只剔除运行期用不到的文件（跨平台安全，mac/win 同一套规则）
+#   - pip：分发包里靠它装东西没意义；仅占 11MB
+#   - fontTools：只有 tools/subset_fonts.py 等构建脚本用，服务/OCR 运行期零引用（20MB）
+#   - include/share/dist-info/LICENSE：纯构建期产物或元数据
+# 注意：C 扩展的 .so/.pyd 与 numpy/onnxruntime/PIL 等运行期必需包一律保留。
+SKIP_ANY = ("/site-packages/pip/", "/site-packages/pip-", "/site-packages/fontTools/",
+            "/site-packages/fonttools-")
+SKIP_PART = ("/include/", "/share/", ".dist-info/", "/__pycache__/")
+
 def mode_of(path: str) -> int:
     """保留可执行位（start.command / bin/python3 在 mac 上必须可执行）。"""
     st = os.stat(path)
@@ -56,6 +65,9 @@ with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED, compresslevel=6) as z:
             if rel == out or fn in SKIP_FILES or fn.endswith(SKIP_EXT):
                 continue
             if rel.startswith(SKIP_PREFIX):
+                continue
+            full = "/" + rel
+            if any(p in full for p in SKIP_ANY) or any(p in full for p in SKIP_PART):
                 continue
             zi = zipfile.ZipInfo.from_file(rel, rel)
             zi.compress_type = zipfile.ZIP_DEFLATED
