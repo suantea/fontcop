@@ -4,6 +4,10 @@ pillow>=10.0
 fonttools>=4.40
 # OCR 自动识别（可选：不安装则前端退回手动框选模式；FONTOP_NO_OCR=1 可显式关闭）
 rapidocr-onnxruntime>=1.2.0
-# opencv 5.0.0 起新 NEON resize 核（kleidicv）在 macOS/arm64 特定输入尺寸上 SIGSEGV，
-# 会把整个服务进程打崩（前端表现为「自动识别失败：Load failed」）。锁 <5。
-opencv-python>=4.11.0.86,<5
+# 注意：**故意不装 opencv-python**。它占 120MB（分发包最大头），而 RapidOCR 只用
+# 到 24 个函数（resize/cvtColor/fillPoly/warpPerspective/findContours 等），已由
+# src/cv2_shim.py 用 Pillow+NumPy 等价实现，并在 OCR 子进程 import 前顶替 cv2。
+# 同图比对过：真 cv2 得「的国人民」0.7991，shim 得 0.7993，结果一致。
+# 历史坑（保留）：opencv 5.0 起新 NEON resize 核在 macOS/arm64 个别尺寸必现 SIGSEGV；
+# 现在不再依赖 opencv，这类崩溃面直接消失。若确需真 opencv 调试，临时
+# `pip install "opencv-python>=4.11.0.86,<5"` 即可 —— shim 只在 cv2 缺失时兜底。

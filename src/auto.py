@@ -26,6 +26,9 @@ _OCR_WORKER_LOCK = threading.Lock()
 
 
 def ocr_available() -> bool:
+    # 先装 shim：剥掉 opencv 后，父进程直接 import rapidocr 会因缺 cv2 失败，
+    # 而真正干活的 OCR 子进程是装了 shim 的 —— 不先补上会误报「RapidOCR 未安装」（501）
+    _install_cv2_shim_if_needed()
     try:
         import rapidocr_onnxruntime  # noqa: F401
         return True
@@ -33,10 +36,30 @@ def ocr_available() -> bool:
         return False
 
 
+def _install_cv2_shim_if_needed() -> None:
+    """未装 opencv 时，把 src/cv2_shim.py 注册成 `cv2` 模块供 RapidOCR 使用。
+
+    opencv-python 占 120MB 且是分发包最大头，而 RapidOCR 只用到 24 个函数。
+    RapidOCR 全部是 `import cv2`（无 from-import），所以在它导入前塞进
+    sys.modules 即可完全不改上游源码地替换 —— 这也是唯一能剥离 opencv 的前提。
+    """
+    import sys
+    if "cv2" in sys.modules:
+        return
+    try:
+        import cv2  # noqa: F401  真装了 opencv 就用真的，shim 只作兜底
+        return
+    except ImportError:
+        pass
+    from src import cv2_shim
+    sys.modules["cv2"] = cv2_shim
+
+
 def _ocr_child(child_conn) -> None:
     """OCR 隔离子进程：独占 RapidOCR session，崩溃/挂起不影响 HTTP 服务。"""
     import signal as _s
     _s.signal(_s.SIGINT, _s.SIG_IGN)  # 仅父进程控制生命周期
+    _install_cv2_shim_if_needed()
     try:
         from rapidocr_onnxruntime import RapidOCR
         ocr = RapidOCR()

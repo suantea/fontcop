@@ -44,7 +44,18 @@ PY_EXE="$OUT/$PY_EXE_REL"
 "$PY_EXE" -m pip install -r "$ROOT/requirements.txt"
 
 echo "== 校验关键依赖 =="
-"$PY_EXE" -c "import numpy, PIL, cv2, rapidocr_onnxruntime; print('deps ok')"
+# cv2 不再随包安装（见 requirements.txt）：src/cv2_shim.py 在 OCR 子进程内顶替它。
+# 校验必须覆盖「无 opencv 也能起 OCR」这条真实路径，否则打包出去才发现是 501。
+"$PY_EXE" -c "import numpy, PIL, rapidocr_onnxruntime; print('deps ok')"
+"$PY_EXE" -c "
+import sys
+sys.path.insert(0, '$ROOT')
+from src.auto import _install_cv2_shim_if_needed
+_install_cv2_shim_if_needed()
+import cv2
+assert not hasattr(cv2, '__file__') or 'cv2_shim' in (cv2.__file__ or ''), 'cv2 应来自 shim 而非 opencv'
+print('cv2 shim ok:', getattr(cv2, '__version__', '?'))
+"
 
 echo "== 完成：python-runtime 已就绪 =="
 "$PY_EXE" --version
