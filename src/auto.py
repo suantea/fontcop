@@ -7,6 +7,7 @@
 from __future__ import annotations
 
 import io
+import multiprocessing as mp
 import os
 import threading
 from pathlib import Path
@@ -18,8 +19,10 @@ from PIL import Image
 from src.pipeline import Matcher, _group_of
 from src.features import verdict_of
 
-_ocr = None
-_OCR_LOCK = threading.Lock()   # onnxruntime session 非线程安全：识别串行化，比对仍可并行
+# OCR 在异常输入下可能 SIGSEGV / 永久挂起。为不让一次 OCR 崩溃打死整个 HTTP 服务，
+# 把 RapidOCR 放进独立子进程：崩溃/挂起只影响该子进程，父进程（服务）超时后重启它并回退。
+_OCR_WORKER: "_OcrWorker | None" = None
+_OCR_WORKER_LOCK = threading.Lock()
 
 
 def ocr_available() -> bool:
@@ -30,14 +33,100 @@ def ocr_available() -> bool:
         return False
 
 
-def get_ocr():
-    global _ocr
-    if _ocr is None:
-        with _OCR_LOCK:
-            if _ocr is None:  # 双重检查：防止并发下重复初始化（初始化耗时数十秒）
-                from rapidocr_onnxruntime import RapidOCR
-                _ocr = RapidOCR()
-    return _ocr
+def _ocr_child(child_conn) -> None:
+    """OCR 隔离子进程：独占 RapidOCR session，崩溃/挂起不影响 HTTP 服务。"""
+    import signal as _s
+    _s.signal(_s.SIGINT, _s.SIG_IGN)  # 仅父进程控制生命周期
+    try:
+        from rapidocr_onnxruntime import RapidOCR
+        ocr = RapidOCR()
+    except Exception as e:  # 初始化失败：每个请求回错误，由调用方走回退路径
+        while True:
+            try:
+                child_conn.recv()
+            except EOFError:
+                return
+            child_conn.send((False, f"OCR 初始化失败: {e}"))
+        return
+    while True:
+        try:
+            arr = child_conn.recv()
+        except EOFError:
+            return
+        try:
+            res, _ = ocr(arr)
+            child_conn.send((True, res))
+        except Exception as e:  # ponytail: 捕获一切，避免子进程因 OCR 异常退出
+            child_conn.send((False, f"OCR 运行失败: {e}"))
+
+
+class _OcrWorker:
+    """单例 OCR 子进程管理器：带超时与崩溃重启隔离。"""
+
+    def __init__(self) -> None:
+        self._lock = threading.Lock()
+        self._start()
+
+    def _start(self) -> None:
+        parent_conn, child_conn = mp.Pipe()
+        self._parent = parent_conn
+        self._proc = mp.Process(target=_ocr_child, args=(child_conn,), daemon=True)
+        self._proc.start()
+        child_conn.close()
+        # 预热：触发子进程内 OCR 模型初始化（耗时数十秒），失败不致命
+        try:
+            self.call(np.zeros((32, 32, 3), dtype=np.uint8), timeout=180)
+        except Exception:
+            pass
+
+    def call(self, arr, timeout: float):
+        with self._lock:
+            try:
+                self._parent.send(arr)
+            except (BrokenPipeError, EOFError):
+                self._restart()
+                self._parent.send(arr)
+            if not self._parent.poll(timeout):
+                self._restart()
+                raise TimeoutError("OCR 子进程超时")
+            try:
+                ok, payload = self._parent.recv()
+            except (EOFError, BrokenPipeError):
+                self._restart()
+                raise RuntimeError("OCR 子进程已退出")
+        if not ok:
+            raise RuntimeError(str(payload))
+        return payload
+
+    def _restart(self) -> None:
+        try:
+            self._proc.kill()
+        except Exception:
+            pass
+        try:
+            self._parent.close()
+        except Exception:
+            pass
+        self._start()
+
+
+class _OcrHandle:
+    """get_ocr() 返回的可调用句柄，保持 ocr(arr) -> (result, None) 契约（兼容测试 mock）。"""
+
+    def __init__(self, worker: "_OcrWorker") -> None:
+        self._worker = worker
+
+    def __call__(self, arr, timeout: float = 55.0):
+        return (self._worker.call(arr, timeout), None)
+
+
+def get_ocr() -> _OcrHandle:
+    global _OCR_WORKER
+    if _OCR_WORKER is None:
+        with _OCR_WORKER_LOCK:
+            if _OCR_WORKER is None:  # 双重检查：防止并发下重复起子进程
+                _OCR_WORKER = _OcrWorker()
+    return _OcrHandle(_OCR_WORKER)
 
 
 def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_per_line: int = 20) -> dict:
@@ -72,8 +161,11 @@ def auto_match(matcher: Matcher, image_b64: str, max_lines: int = 3, max_chars_p
         padded = Image.new("RGB", (base.width + pad * 2, base.height + pad * 2), (255, 255, 255))
         padded.paste(base, (pad, pad))
         arr = np.asarray(padded)
-        with _OCR_LOCK:
+        try:
             result, _ = ocr(arr)
+        except Exception as e:  # OCR 子进程崩溃/超时：隔离后回退逐段搜索，不打死服务
+            print(f"[auto] OCR 调用失败（回退逐段搜索）: {e}", flush=True)
+            result = None
         if result:
             break
 
