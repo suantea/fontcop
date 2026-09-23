@@ -82,13 +82,22 @@ jobs:
         with:
           name: FontCop-windows
           path: artifacts
-      - name: 发布 Release
+      - name: 发布/更新 Release（幂等）
         env:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        shell: bash
         run: |
-          gh release create "${{ steps.ver.outputs.tag }}" \
-            --repo "${{ github.repository }}" \
-            --title "FontCop ${{ steps.ver.outputs.tag }} - 绿色版（解压即用）" \
-            --notes "FontCop 绿色版（解压即用，无安装器）。mac 解压后双击 start.command，Windows 解压后双击 start.bat。比对全在本机，完全离线。" \
-            --latest \
-            artifacts/FontCop-macos.zip artifacts/FontCop-windows.zip
+          TAG="${{ steps.ver.outputs.tag }}"
+          REPO="${{ github.repository }}"
+          if gh release view "$TAG" --repo "$REPO" >/dev/null 2>&1; then
+            # 已存在（如补发某个平台的 zip）：追加/覆盖同名 asset
+            gh release upload "$TAG" --repo "$REPO" --clobber \
+              artifacts/FontCop-macos.zip artifacts/FontCop-windows.zip
+          else
+            gh release create "$TAG" \
+              --repo "$REPO" \
+              --title "FontCop $TAG - 绿色版（解压即用）" \
+              --notes "FontCop 绿色版（解压即用，无安装器）。mac 解压后双击 start.command，Windows 解压后双击 start.bat。比对全在本机，完全离线。" \
+              --latest \
+              artifacts/FontCop-macos.zip artifacts/FontCop-windows.zip
+          fi
