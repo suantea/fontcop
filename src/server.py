@@ -11,6 +11,7 @@ import io
 import json
 import os
 import sys
+import threading
 import time
 import traceback
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -264,8 +265,35 @@ class Handler(BaseHTTPRequestHandler):
             except Exception as e:  # noqa: BLE001
                 traceback.print_exc(file=sys.stderr)
                 self._json(500, {"error": str(e)})
+        elif path == "/api/shutdown":
+            # 本机模式专用：前端/桌面壳的「关闭服务」按钮调它优雅退出。
+            # 只允许回环来源，避免部署模式（反代/公网）被任意请求关停。
+            if not self._is_loopback_client():
+                self._json(403, {"error": "shutdown 仅限本机访问"})
+                return
+            self._json(200, {"status": "shutting down"})
+            threading.Thread(target=_shutdown_soon, daemon=True).start()
         else:
             self._json(404, {"error": "not found"})
+
+    def _is_loopback_client(self) -> bool:
+        """请求来源是否为本机回环（IPv4/IPv6）。"""
+        host = self.client_address[0] if self.client_address else ""
+        import ipaddress
+        try:
+            return ipaddress.ip_address(host).is_loopback
+        except ValueError:
+            return host == "localhost"
+
+
+def _shutdown_soon() -> None:
+    """稍后终止进程：先让 /api/shutdown 的响应写回客户端，再退出。
+
+    用 os._exit 而非 sys.exit：当前跑在内置 HTTP 服务的线程里，sys.exit 只结束
+    该线程；这里要停的是整个服务进程（OCR 子进程由父进程退出后自行回收）。
+    """
+    time.sleep(0.2)
+    os._exit(0)
 
 
 def start_server(open_browser: bool = True) -> ThreadingHTTPServer | None:

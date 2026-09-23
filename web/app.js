@@ -381,6 +381,19 @@ async function doAutoRecognize(b64) {
   $("about-close").onclick = () => $("modal-about").hidden = true;
   $("btn-about").onclick = () => { $("modal-about").hidden = false; };
 
+  // ---------- 关闭服务（本机模式）：调 /api/shutdown 停掉本地服务进程 ----------
+  $("btn-quit").onclick = async () => {
+    if (!confirm("确定关闭 FontCop 本地服务？关闭后需重新启动才能继续识别。")) return;
+    try {
+      await fetch("/api/shutdown", { method: "POST" });
+    } catch { /* 服务可能在响应前就已退出，属预期 */ }
+    document.body.innerHTML =
+      '<div style="display:flex;height:100vh;align-items:center;justify-content:center;'
+      + 'font:16px/1.6 -apple-system,sans-serif;color:#444;text-align:center">'
+      + 'FontCop 服务已关闭<br><span style="color:#888;font-size:14px">'
+      + '可关闭本页；重新识别请再双击启动程序。</span></div>';
+  };
+
   // ---------- 开源协议说明弹层（点候选卡片里的协议名触发）----------
   const LICENSE_INFO = {
     "SIL-OFL": {
