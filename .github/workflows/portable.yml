@@ -1,0 +1,94 @@
+name: portable-build
+
+# FontCop 绿色版双平台构建（解压即用 zip，无 Electron/.exe）：
+#   macos-latest 出 FontCop-macos.zip，windows-latest 出 FontCop-windows.zip，
+#   合并发到同名 tag 的 GitHub Release（latest）。
+# 触发：push tag v*，或 workflow_dispatch 手动指定 version。
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+    inputs:
+      version:
+        description: "Release 版本号（如 1.1.0）"
+        required: true
+        default: "1.1.0"
+
+permissions:
+  contents: write
+
+jobs:
+  build-mac:
+    runs-on: macos-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建独立 Python 运行时
+        run: bash build_python.sh
+        shell: bash
+      - name: 建字形索引
+        run: ./python-runtime/bin/python3 -m src.indexer
+        shell: bash
+      - name: 打包绿色 zip
+        run: bash package.sh
+        shell: bash
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FontCop-macos
+          path: FontCop-macos.zip
+          if-no-files-found: error
+
+  build-win:
+    runs-on: windows-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: 构建独立 Python 运行时
+        run: bash build_python.sh
+        shell: bash
+      - name: 建字形索引
+        run: ./python-runtime/python.exe -m src.indexer
+        shell: bash
+      - name: 打包绿色 zip
+        run: bash package.sh
+        shell: bash
+      - name: 上传 artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: FontCop-windows
+          path: FontCop-windows.zip
+          if-no-files-found: error
+
+  release:
+    needs: [build-mac, build-win]
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - name: 解析版本号
+        id: ver
+        shell: bash
+        run: |
+          if [ "${{ github.event_name }}" = "workflow_dispatch" ]; then
+            echo "tag=v${{ github.event.inputs.version }}" >> "$GITHUB_OUTPUT"
+          else
+            echo "tag=${GITHUB_REF_NAME}" >> "$GITHUB_OUTPUT"
+          fi
+      - uses: actions/download-artifact@v4
+        with:
+          name: FontCop-macos
+          path: artifacts
+      - uses: actions/download-artifact@v4
+        with:
+          name: FontCop-windows
+          path: artifacts
+      - name: 发布 Release
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "${{ steps.ver.outputs.tag }}" \
+            --repo "${{ github.repository }}" \
+            --title "FontCop ${{ steps.ver.outputs.tag }} - 绿色版（解压即用）" \
+            --notes "FontCop 绿色版（解压即用，无安装器）。mac 解压后双击 start.command，Windows 解压后双击 start.bat。比对全在本机，完全离线。" \
+            --latest \
+            artifacts/FontCop-macos.zip artifacts/FontCop-windows.zip
